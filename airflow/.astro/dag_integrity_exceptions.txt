@@ -1,0 +1,9 @@
+# Add dag files to exempt from parse test below. ex: dags/<test-file>
+#
+# card_acquisition_pipeline uses Cosmos, which parses the dbt project (dbt ls) at DAG-load
+# time. The dbt project is bind-mounted into the running Airflow containers (see
+# docker-compose.override.yml) — it is NOT baked into the image. The standalone
+# `astro dev parse` integrity-test container runs WITHOUT those mounts, so it can't
+# find dbt_project.yml. The DAG parses correctly in the real scheduler at
+# `astro dev start`, where the mounts are present.
+dags/card_acquisition_pipeline.py

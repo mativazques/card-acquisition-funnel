@@ -1,0 +1,26 @@
+# Picked up automatically by `astro dev start`.
+#
+# Keeps ONE source of truth for the dbt project: instead of copying dbt/ into the
+# Astro image, we bind-mount the repo's dbt/ and scripts/ into every Airflow
+# container. BigQuery auth reuses your local ADC (gcloud application-default),
+# mounted read-only — no service-account key on disk. Env comes from the repo .env.
+---
+x-mounts: &mounts
+  - ../dbt:/usr/local/airflow/dbt:rw
+  - ../scripts:/usr/local/airflow/scripts:ro
+  - ${HOME}/.config/gcloud:/home/astro/.config/gcloud:ro
+
+x-env: &env
+  env_file:
+    - ../.env
+
+services:
+  scheduler:
+    volumes: *mounts
+    <<: *env
+  triggerer:
+    volumes: *mounts
+    <<: *env
+  webserver:
+    volumes: *mounts
+    <<: *env
