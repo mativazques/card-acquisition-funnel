@@ -1,0 +1,147 @@
+version: 2
+
+models:
+  - name: mart_adoption_curves
+    description: >
+      Adoption vintage triangle — cumulative card-adoption rate by
+      (acq_month x msa). Powers the adoption-curve chart and the adoption_rate
+      metric at each msa window. Restricted to within-panel acquirees.
+      Numerator is is_adopted_clean (excludes left-censored customers).
+      `is_cell_right_censored = true` rows are available but should be plotted
+      as dashed lines or excluded — the cohort did not have enough panel time
+      to complete the msa window. The critic agent uses `is_cell_right_censored`
+      as the Guard-1 right-censoring suppression flag.
+    columns:
+      - name: acq_month
+        description: Acquisition cohort month (DATE; first day of month).
+        data_tests: [not_null]
+      - name: msa
+        description: >
+          Months-since-acquisition (integer, 0..17). The funnel vocabulary is MSA,
+          NOT MOB — MSA counts elapsed months from the acquisition cohort month.
+        data_tests: [not_null]
+      - name: as_of_month
+        description: Calendar month this msa corresponds to (acq_month + msa months).
+        data_tests: [not_null]
+      - name: n_observed
+        description: Customers in the cohort (stable across msa for a given acq_month).
+        data_tests: [not_null]
+      - name: n_adopted_clean
+        description: Cumulative clean adopters by this msa (is_adopted_clean AND months_to_adoption <= msa).
+        data_tests: [not_null]
+      - name: adoption_rate
+        description: >
+          Cumulative card-adoption rate at this msa: n_adopted_clean / n_observed.
+          Monotonically non-decreasing within a cohort. Right-censored cells are
+          lower bounds, not final rates.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: is_cell_right_censored
+        description: >
+          True if acq_month + msa months > 2016-05-01 (snapshot_end). The cohort
+          did not have enough panel time to accumulate this many post-acquisition months.
+          The critic agent suppresses these cells from proactive digest output (Guard 1).
+          Computed in dbt so the critic reads a field, not re-derives it.
+        data_tests: [not_null]
+      - name: fully_observed_n
+        description: >
+          Convenience inverse of is_cell_right_censored. True if the cell is fully
+          observed (the whole cohort has aged at least msa months by the panel end).
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - acq_month
+            - msa
+
+  - name: mart_cohort_adoption
+    description: >
+      Cohort adoption summary — one row per (acq_month x segmento) with adoption,
+      retention, and time-to-adoption metrics. Cohort heatmap source and semantic
+      layer entry point for the proactive multi-agent digest. Restricted to
+      within-panel acquirees. Carries fully_observed_6 / fully_observed_12 flags
+      so the critic and BI do not need to re-derive right-censoring.
+    columns:
+      - name: acq_month
+        description: Acquisition cohort month (DATE).
+        data_tests: [not_null]
+      - name: segmento
+        description: Customer segment. 'unknown' if NULL in source.
+        data_tests: [not_null]
+      - name: cohort_size
+        description: Customers in this cohort x segment cell.
+        data_tests: [not_null]
+      - name: n_adopted
+        description: Customers with is_adopted_clean = true in this cell.
+        data_tests: [not_null]
+      - name: adoption_rate
+        description: >
+          Lifetime-to-panel-end card-adoption rate (n_adopted / cohort_size).
+          For fully-observed cohorts (fully_observed_6 = true) this approximates
+          the 6-month adoption rate. For partially-observed cohorts it is a floor.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: n_right_censored
+        description: Customers for whom even the msa_6 window was truncated (right-censored).
+        data_tests: [not_null]
+      - name: fully_observed_6
+        description: >
+          True if acq_month + 6 months <= 2016-05-01. This cohort has had 6 full
+          panel months — the primary fully-observed window for vintage analysis.
+          The proactive digest defaults to the latest cohort where this is true.
+        data_tests: [not_null]
+      - name: fully_observed_12
+        description: >
+          True if acq_month + 12 months <= 2016-05-01. Only ~5 early-2015 cohorts
+          qualify — labeled "limited cohort pool" in any analysis at msa_12.
+        data_tests: [not_null]
+      - name: avg_months_to_adoption
+        description: >
+          Average months from acq_month to first card adoption, among is_adopted_clean
+          customers in this cell. NULL if no adoptions in the cell.
+      - name: retention_rate_1m
+        description: >
+          Share of adopted customers still holding card 1 month after first adoption.
+          Denominator: n_adopted.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: retention_rate_2m
+        description: Same as retention_rate_1m but at +2 months.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: retention_rate_3m
+        description: Same as retention_rate_1m but at +3 months.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: share_with_panel_gaps
+        description: >
+          Share of customers in this cell with panel gaps (has_panel_gaps = true).
+          The critic agent flags cells where this exceeds 5% as having potential
+          time-to-adoption measurement noise.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - acq_month
+            - segmento

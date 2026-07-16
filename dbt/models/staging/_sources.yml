@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: santander
+    description: >
+      Raw Santander Product Recommendation panel (Kaggle competition, 2016),
+      released by Banco Santander, S.A. ~13.6M monthly customer snapshots
+      (Jan 2015 – May 2016, 17 snapshot dates). Loaded as-is by
+      `scripts/ingest.py` with ALL 48 columns as STRING. Public data —
+      no proprietary book. Non-commercial/educational/portfolio use only.
+    database: "{{ env_var('GCP_PROJECT') }}"
+    schema: "{{ env_var('BQ_DATASET', 'raw') }}"
+    tables:
+      - name: santander_customer_month
+        identifier: "{{ env_var('BQ_RAW_TABLE', 'santander_customer_month') }}"
+        description: >
+          One row per customer x snapshot month. 13,647,309 rows,
+          956,645 distinct customers, 17 monthly snapshots
+          (2015-01-28 … 2016-05-28). All 48 columns loaded as STRING;
+          all casting and cleaning occurs in stg_customer_month.
+          The 24 `ind_*_ult1` columns are binary product-holding flags
+          (1 = holds the product in that snapshot month, 0 = does not).
+          The credit-card flag `ind_tjcr_fin_ult1` is the funnel outcome.

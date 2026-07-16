@@ -1,0 +1,178 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: >
+      Month-grain calendar dimension (2015-01 .. 2017-12). Covers the Santander
+      panel window plus 12 months of runway for the msa_12 window.
+    columns:
+      - name: date_key
+        description: Integer YYYYMM key.
+        data_tests: [not_null, unique]
+      - name: date_month
+        description: First day of the calendar month (DATE).
+        data_tests: [not_null]
+
+  - name: dim_customer
+    description: >
+      Junk dimension of customer attributes (segmento, income_band, age_band,
+      province). NOTE: Santander uses obfuscated numeric customer codes and
+      does not expose a stable personal identifier in this public dataset, so
+      this is NOT a per-person dimension — it is a junk dimension of applicant
+      attribute combinations. Honest by design (same pattern as dim_borrower
+      in flagship #1).
+    columns:
+      - name: customer_key
+        description: Surrogate key (MD5 over segmento, income_band, age_band, province).
+        data_tests: [not_null, unique]
+      - name: segmento
+        description: >
+          Customer segment code. Known values: '01 - TOP', '02 - PARTICULARES',
+          '03 - UNIVERSITARIO'. NULL for some rows (kept as-is).
+      - name: income_band
+        description: >
+          Income band derived from renta (low / mid / high / very_high / unknown).
+          Thresholds approximate; Santander's internal income scale is not disclosed.
+      - name: age_band
+        description: Age band derived from age column (under_18 through 65_plus / unknown).
+      - name: province
+        description: Spanish province name (nomprov).
+
+  - name: dim_channel
+    description: >
+      Acquisition channel dimension. NOTE: all channel codes (canal_entrada) are
+      obfuscated 3-letter codes (e.g., 'KAT', 'KHE'). The real channel names
+      (branch / web / telesales / etc.) are NOT disclosed in the public dataset.
+      Values are labeled as 'channel_<code>' — never relabeled with inferred names.
+      Presenting inferred labels would be fabricating data. See BLUEPRINT.md §Scope Boundary.
+    columns:
+      - name: channel_key
+        description: Surrogate key.
+        data_tests: [not_null, unique]
+      - name: channel_code
+        description: Raw 3-letter obfuscated channel code from canal_entrada. 'unknown' if NULL.
+      - name: channel_label
+        description: >
+          Machine-readable label (channel_<code>). NOT a human-readable channel name —
+          those are obfuscated. Do not interpret as branch/web/telesales.
+
+  - name: fct_customer
+    description: >
+      Customer-level resolved fact. One row per customer (unique on customer_id).
+      Contains adoption timing, censoring flags, retention flags, and FKs to dims.
+      Source for cohort-level adoption summaries in mart_cohort_adoption.
+    columns:
+      - name: customer_id
+        description: Primary key (customer; from ncodpers).
+        data_tests: [not_null, unique]
+      - name: acq_date_key
+        description: >
+          FK to dim_date (acq_month as YYYYMM integer). NULL for customers whose
+          fecha_alta predates the panel window or is un-parseable (~83% of the full
+          panel are pre-panel acquirees with a valid but out-of-window acq_month;
+          a small fraction have a NULL or malformed fecha_alta).
+      - name: customer_key
+        description: FK to dim_customer.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customer')
+              field: customer_key
+      - name: channel_key
+        description: FK to dim_channel.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_channel')
+              field: channel_key
+      - name: acq_month
+        description: Acquisition cohort month (DATE; first day of month).
+      - name: is_within_panel_cohort
+        description: >
+          True if acq_month falls within the 17-month panel window (2015-01 .. 2016-05).
+          Only within-panel acquirees have clean vintage curves (all others are left-truncated).
+        data_tests: [not_null]
+      - name: is_left_censored_card
+        description: >
+          True if the customer already held the credit card at their first observed panel
+          snapshot. These customers are excluded from is_adopted_clean — the 0→1 flip
+          was never observed. Prevalence ~0.06% in this dataset (gate passed).
+        data_tests: [not_null]
+      - name: is_adopted_observed
+        description: >
+          True if a 0→1 flip of card_flag was observed for this customer within the panel.
+        data_tests: [not_null]
+      - name: is_adopted_clean
+        description: >
+          The governed adoption metric numerator. True if the 0→1 flip was observed AND
+          the customer was NOT left-censored (did not already hold the card at first obs).
+          Consumed by adoption_rate in the semantic layer.
+        data_tests: [not_null]
+      - name: is_right_censored
+        description: >
+          True if the customer was acquired within 6 months of the panel end (May 2016),
+          meaning the msa_6 window is not fully observed for them.
+      - name: has_panel_gaps
+        description: >
+          True if any expected monthly snapshot is missing for this customer between their
+          first and last observed panel month. Panel gaps can inflate apparent time-to-adoption
+          by one or more months. Flag carried into mart_cohort_adoption for transparency.
+        data_tests: [not_null]
+      - name: months_to_adoption
+        description: >
+          Months from acq_month to first_card_month (DATE_DIFF, month). NULL if not adopted.
+          Note: counts calendar months, not panel-observation count.
+      - name: retained_1m
+        description: >
+          True if card still held 1 month after first_card_month. NULL if not adopted.
+          False if adopted but no snapshot available at +1 month (panel end truncation).
+      - name: retained_2m
+        description: Same as retained_1m but at +2 months.
+      - name: retained_3m
+        description: Same as retained_1m but at +3 months.
+
+  - name: fct_customer_month
+    description: >
+      One row per customer x snapshot month (the monthly panel). ~13M rows.
+      Materialized as a TABLE partitioned by snapshot_month (month granularity),
+      clustered by acq_month and segmento, to eliminate 3–8 s scan latency on
+      every Streamlit/semantic-layer call (VIEW pattern from #1's fct_loan_month
+      does not transfer here — 13M vs 2.2M rows).
+      Carries `msa` (months-since-acquisition) and `card_flag` as the main
+      analytical columns.
+    columns:
+      - name: customer_month_key
+        description: Surrogate key (customer_id x snapshot_month).
+        data_tests: [not_null, unique]
+      - name: customer_id
+        description: FK to fct_customer.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('fct_customer')
+              field: customer_id
+      - name: snapshot_month
+        description: Panel snapshot date (DATE; always last day of month in this panel).
+        data_tests: [not_null]
+      - name: acq_month
+        description: Acquisition cohort month (DATE; first day of month). NULL for pre-panel acquirees.
+      - name: msa
+        description: >
+          Months-since-acquisition: date_diff(snapshot_month, acq_month, month).
+          NULL if acq_month is NULL. 0 = snapshot in the same month as acquisition.
+          The vocabulary is MSA (months-since-acquisition), NOT MOB (month-on-book).
+      - name: card_flag
+        description: Credit-card holding flag in this snapshot month (1 = holds, 0 = does not).
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: segmento
+        description: Customer segment code in this snapshot.
+      - name: is_within_panel_cohort
+        description: True if this customer's acquisition falls within the panel window.
+        data_tests: [not_null]
+      - name: is_adopted_clean
+        description: FK / flag from fct_customer — the governed adoption status for this customer.
+        data_tests: [not_null]

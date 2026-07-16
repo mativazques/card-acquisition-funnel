@@ -1,0 +1,105 @@
+version: 2
+
+models:
+  - name: stg_customer_month
+    description: >
+      Cleaned, one-row-per-customer-x-snapshot-month staging model over the raw
+      Santander Product Recommendation panel. All 48 source columns are STRING;
+      casting, null-handling (leading spaces + 'NA'), and banding happen here.
+      This model referencing every metric-source column IS the Phase-1 readiness
+      gate: if a column is missing or renamed upstream, the build fails here.
+    columns:
+      - name: customer_id
+        description: Numeric customer identifier (cast from ncodpers).
+        data_tests: [not_null]
+      - name: snapshot_month
+        description: >
+          Snapshot date for this row (DATE; always the last day of each month
+          in the panel, e.g. 2015-01-28). Used as the time axis for all monthly
+          panel calculations.
+        data_tests: [not_null]
+      - name: fecha_alta
+        description: >
+          Customer acquisition date (raw join date; DATE). This is the real
+          calendar date, not derived. Source for acq_month cohort grouping.
+          NULL if the raw value is missing or un-parseable.
+      - name: acq_month
+        description: >
+          Acquisition cohort month: DATE_TRUNC(fecha_alta, MONTH). The primary
+          cohort anchor for vintage adoption curves. NULL for customers where
+          fecha_alta is NULL or un-parseable.
+      - name: seniority_months
+        description: >
+          Customer seniority in months (antiguedad). Leading spaces stripped;
+          'NA' and negative values coerced to NULL.
+      - name: is_new_customer
+        description: >
+          Flag indicating customer is new in this snapshot period (ind_nuevo).
+          1 = new, 0 = not new, NULL if source is unparseable.
+      - name: age
+        description: >
+          Customer age in years (INT64). Leading spaces stripped; 'NA' -> NULL.
+      - name: age_band
+        description: >
+          Age band for BI slicing and junk dim. Buckets: under_18, 18_24, 25_34,
+          35_44, 45_54, 55_64, 65_plus, unknown.
+        data_tests:
+          - accepted_values:
+              values: ['under_18', '18_24', '25_34', '35_44', '45_54',
+                       '55_64', '65_plus', 'unknown']
+      - name: income
+        description: >
+          Customer gross income (renta; FLOAT64, approximate EUR). Leading spaces
+          stripped; 'NA' and empty -> NULL. ~32% of rows have no income reported.
+      - name: income_band
+        description: >
+          Income band for BI slicing and junk dim. Buckets: low (<30k), mid
+          (30k–80k), high (80k–150k), very_high (>=150k), unknown (NULL income).
+          Thresholds are approximate — Santander's internal scale is not disclosed.
+        data_tests:
+          - accepted_values:
+              values: ['low', 'mid', 'high', 'very_high', 'unknown']
+      - name: segmento
+        description: >
+          Customer segment code (trimmed). Known values: '01 - TOP',
+          '02 - PARTICULARES', '03 - UNIVERSITARIO'. NULL for some rows.
+      - name: canal_entrada
+        description: >
+          Acquisition channel code (3-letter, obfuscated by Santander).
+          Presented as 'channel segments', never relabeled to branch/web/telesales
+          — the underlying channel names are not disclosed in the public dataset.
+      - name: cod_prov
+        description: Spanish province code (trimmed).
+      - name: nomprov
+        description: Spanish province name (trimmed).
+      - name: pais_residencia
+        description: Country of residence (2-letter ISO code).
+      - name: indresi
+        description: Residency flag (S = resident, N = non-resident).
+      - name: indext
+        description: Foreign flag (S = foreigner, N = national).
+      - name: is_active
+        description: >
+          Customer activity flag (ind_actividad_cliente; INT64).
+          1 = active, 0 = inactive.
+      - name: ind_empleado
+        description: Employee indicator (trimmed; A/B/F/N/P).
+      - name: indrel
+        description: >
+          Customer relationship: 1 = primary, 99 = co-owner at start of month.
+      - name: tiprel_1mes
+        description: Customer relationship type at start of month.
+      - name: card_flag
+        description: >
+          Credit-card holding flag (ind_tjcr_fin_ult1; INT64).
+          1 = customer holds the Santander credit card in this snapshot month.
+          0 = does not hold it. This is the funnel adoption outcome — a 0→1 flip
+          in consecutive snapshots marks card adoption. A flag that is already 1
+          at first observation is left-censored for adoption purposes.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+              quote: false
+      - name: card_flag_raw
+        description: Raw string value of ind_tjcr_fin_ult1 before casting (audit).
