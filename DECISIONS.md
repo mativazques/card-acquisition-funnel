@@ -1,4 +1,4 @@
-# Decisions Log — card-acquisition-cockpit
+# Decisions Log — card-acquisition-funnel
 
 Chronological log of the binding decisions taken while designing this project, so any
 future session (or reviewer) can see *why* the BLUEPRINT looks the way it does. Newest

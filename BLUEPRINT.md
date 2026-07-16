@@ -1,4 +1,4 @@
-# Card-Acquisition Cockpit — Blueprint
+# Card-Acquisition Funnel — Blueprint
 
 > Flagship #2. A **proactive, self-directing multi-agent funnel-analytics system with a
 > built-in data-honesty gate** — built on a credit-card acquisition→adoption→retention
@@ -420,15 +420,15 @@ ceiling, no billing kill-switch), digest **pre-generated + cached** (a handful o
 calls once per cohort-month, trivially within free tier), GCS/Artifact Registry within free
 tiers, raw CSV never committed, `make hydrate`/`trim`/`teardown`. Dataset (~13M rows but
 compact monthly panel; `fct_customer_month` TABLE ~1–2 GB) fits the billing-account-wide
-free tiers alongside #1. Dedicated GCP project **`card-acquisition-cockpit-2026`** on
+free tiers alongside #1. Dedicated GCP project **`card-acquisition-funnel-2026`** on
 `matirvazques@gmail.com`. **Terraform owns the serving layer only**; the data layer is left
 as bootstrapped (so IaC can't destroy loaded data — #1's lesson).
 
 ## Phased plan
-- **Phase 0 — Scaffold.** Repo (`card-acquisition-cockpit`), `.gitignore` committed FIRST
+- **Phase 0 — Scaffold.** Repo (`card-acquisition-funnel`), `.gitignore` committed FIRST
   (covering `.env`, `*service-account*.json`, `*credentials*.json`, `*.csv`, `*.parquet`,
   `__pycache__/`), ingestion CSV→GCS→BQ, README with the SCOPE BOUNDARY stated, dedicated
-  GCP project `card-acquisition-cockpit-2026`. Git identity `matirvazques@gmail.com`.
+  GCP project `card-acquisition-funnel-2026`. Git identity `matirvazques@gmail.com`.
   **Hard gate:** accept Kaggle competition rules under `matirvazques@gmail.com` before first
   public commit; inspect the actual panel for gap/left-censoring frequency before finalizing
   `is_adopted_clean` grain.
@@ -450,7 +450,7 @@ as bootstrapped (so IaC can't destroy loaded data — #1's lesson).
 ## Decisions (RESOLVED)
 1. **Path A — Santander Product Recommendation** as the primary dataset; funnel reframed to
    **acquisition → card adoption → retention** (no approval stage; honest, real, observed).
-2. **Separate public repo** `card-acquisition-cockpit`; continuity via shared landing/hub.
+2. **Separate public repo** `card-acquisition-funnel`; continuity via shared landing/hub.
 3. **Reuse #1's architecture DNA** (pattern, not code).
 4. **Value lever = card-adoption lift** (cross-sell contribution), NOT approval rate.
 5. **Proactive insight layer**: period selector + monthly digest, **pre-generated in Airflow**,
@@ -484,7 +484,7 @@ as bootstrapped (so IaC can't destroy loaded data — #1's lesson).
     leads with the multi-agent differentiator.
 14. Inherited from #1 unless a reason to change: Streamlit on Cloud Run, AI Studio free tier +
     `gemini-flash-lite-latest`, Terraform serving-only, MIT license, $0/mo, dedicated GCP
-    project `card-acquisition-cockpit-2026`, secrets out, English everywhere, git identity
+    project `card-acquisition-funnel-2026`, secrets out, English everywhere, git identity
     `matirvazques@gmail.com`.
 
 ## Open items before/at Phase 0 (genuine remaining items only)
