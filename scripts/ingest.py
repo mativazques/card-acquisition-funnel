@@ -13,6 +13,10 @@ Non-commercial/educational/portfolio use only; raw data NOT redistributed.
 Accept competition rules at https://www.kaggle.com/c/santander-product-recommendation
 under matirvazques@gmail.com before running this script.
 
+Auth: uses Kaggle's current API token (KGAT_...) as a bearer token against the REST
+API — the pip `kaggle`/`kagglehub` libraries only support the legacy username+key.
+Provide it via KAGGLE_API_TOKEN or ~/.kaggle/access_token (see README / .env.example).
+
 Run:
     pip install -r scripts/requirements.txt
     python scripts/ingest.py
@@ -35,26 +39,58 @@ def env(key: str, default: str | None = None) -> str:
     return val
 
 
+KAGGLE_API_BASE = "https://www.kaggle.com/api/v1"
+
+
+def read_kaggle_token() -> str:
+    """Kaggle's current API token (KGAT_...), read from env or ~/.kaggle/access_token.
+
+    The pip `kaggle`/`kagglehub` libraries still only support the legacy
+    username+key credential; this project uses the newer bearer token, so we call
+    the REST API directly (see download_from_kaggle_competition).
+    """
+    token = os.environ.get("KAGGLE_API_TOKEN")
+    if token:
+        return token.strip()
+    token_file = Path.home() / ".kaggle" / "access_token"
+    if token_file.exists():
+        return token_file.read_text().strip()
+    sys.exit(
+        "No Kaggle API token found. Set KAGGLE_API_TOKEN or write the token to "
+        "~/.kaggle/access_token (see README)."
+    )
+
+
 def download_from_kaggle_competition(competition: str, file_name: str, dest_dir: Path) -> Path:
-    """Download one file from a Kaggle competition, unzipping the resulting .zip."""
-    from kaggle.api.kaggle_api_extended import KaggleApi  # imported late: needs creds
+    """Download one competition file via the Kaggle REST API (bearer token), unzip it.
 
-    api = KaggleApi()
-    api.authenticate()  # reads KAGGLE_USERNAME / KAGGLE_KEY from env
+    Kaggle serves competition CSVs as `<file_name>.zip`; the download endpoint 302-
+    redirects to a signed GCS URL. `requests` strips the Authorization header on the
+    cross-host redirect, so the bearer token is only ever sent to kaggle.com.
+    """
+    import requests
 
+    token = read_kaggle_token()
     dest_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {file_name} from kaggle competition: {competition} ...")
-    # competition_download_file yields a <file_name>.zip in dest_dir
-    api.competition_download_file(competition, file_name, path=str(dest_dir), quiet=False)
-
     zip_path = dest_dir / f"{file_name}.zip"
     csv_path = dest_dir / file_name
 
-    if zip_path.exists():
-        print(f"Unzipping {zip_path.name} ...")
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(dest_dir)
-        zip_path.unlink()
+    url = f"{KAGGLE_API_BASE}/competitions/data/download/{competition}/{file_name}.zip"
+    print(f"Downloading {file_name}.zip from kaggle competition: {competition} ...")
+    with requests.get(
+        url, headers={"Authorization": f"Bearer {token}"}, stream=True, timeout=600
+    ) as resp:
+        if resp.status_code == 401:
+            sys.exit("Kaggle returned 401 — token invalid or competition rules not accepted.")
+        resp.raise_for_status()
+        with open(zip_path, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                fh.write(chunk)
+
+    print(f"Unzipping {zip_path.name} ...")
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(dest_dir)
+    zip_path.unlink()
 
     if not csv_path.exists():
         sys.exit(f"Expected {csv_path} after extraction but it is missing.")
@@ -74,6 +110,15 @@ def upload_to_gcs(local_path: Path, bucket_name: str, blob_name: str) -> str:
     return f"gs://{bucket_name}/{blob_name}"
 
 
+def read_gcs_header(bucket_name: str, blob_name: str) -> list[str]:
+    """Read the CSV header row from GCS (first 64 KB) and return column names."""
+    client = storage.Client()
+    blob = client.bucket(bucket_name).blob(blob_name)
+    head = blob.download_as_bytes(start=0, end=65535).decode("utf-8", errors="replace")
+    header_line = head.splitlines()[0]
+    return [c.strip().strip('"') for c in header_line.split(",")]
+
+
 def load_into_bigquery(
     gcs_uri: str, project: str, dataset: str, table: str, location: str, max_bad_records: int
 ) -> None:
@@ -82,20 +127,25 @@ def load_into_bigquery(
     dataset_ref.location = location
     client.create_dataset(dataset_ref, exists_ok=True)
 
+    # Every raw column is loaded as STRING and cast in dbt staging. The Santander
+    # panel mixes formats within columns (age/antiguedad/renta carry leading spaces,
+    # "NA" placeholders, and decimals), so BigQuery type autodetection fails part-way
+    # through the file. Loading raw-as-text is the reproducible, honest approach: the
+    # raw layer preserves the source verbatim and stg_customer_month owns all casting.
+    bucket_name, _, blob_name = gcs_uri.removeprefix("gs://").partition("/")
+    columns = read_gcs_header(bucket_name, blob_name)
+    schema = [bigquery.SchemaField(name, "STRING") for name in columns]
+
     table_id = f"{project}.{dataset}.{table}"
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.CSV,
-        autodetect=True,
+        schema=schema,
         skip_leading_rows=1,
         allow_quoted_newlines=True,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        # The Santander panel has some rows with missing or malformed fields
-        # (known data-quality characteristic of this competition dataset).
-        # Allow a small number of bad records so they are skipped rather than
-        # failing the entire 13.6M-row load.
         max_bad_records=max_bad_records,
     )
-    print(f"Loading {gcs_uri} -> {table_id} ...")
+    print(f"Loading {gcs_uri} -> {table_id} ({len(columns)} cols, all STRING) ...")
     job = client.load_table_from_uri(gcs_uri, table_id, job_config=job_config)
     job.result()
     dest = client.get_table(table_id)
