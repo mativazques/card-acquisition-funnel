@@ -1,0 +1,19 @@
+# Copy to profiles.yml (git-ignored) — or point DBT_PROFILES_DIR here.
+# Fully env-driven: no secrets live in this file, auth uses Application Default
+# Credentials (`gcloud auth application-default login`), so it is safe to read.
+#
+# Required env vars (see ../.env.example): GCP_PROJECT, BQ_LOCATION.
+# Optional: BQ_DBT_DATASET (target dataset, defaults to "analytics").
+card_acquisition_funnel:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT') }}"
+      dataset: "{{ env_var('BQ_DBT_DATASET', 'analytics') }}"
+      location: "{{ env_var('BQ_LOCATION', 'US') }}"
+      threads: 4
+      priority: interactive
+      job_execution_timeout_seconds: 600
+      job_retries: 1

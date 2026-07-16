@@ -1,0 +1,75 @@
+# --- Secrets & credentials (NEVER commit) ---
+.env
+.env.*
+*.env
+!.env.example
+credentials.json
+client_secret*.json
+*-key.json
+*_key.json
+service-account*.json
+*service_account*.json
+sa-*.json
+gcp-*.json
+*.pem
+secrets/
+kaggle.json
+.kaggle/
+
+# --- dbt ---
+target/
+dbt_packages/
+logs/
+profiles.yml
+.user.yml
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.venv-app/
+.venv-copilot/
+.venv-mcp/
+venv/
+env/
+.python-version
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Data (public datasets are downloaded, not committed) ---
+data/
+*.csv
+*.parquet
+*.xlsx
+*.db
+*.sqlite
+*.zip
+
+# --- Airflow / Astro ---
+airflow.db
+airflow.cfg
+astro/.env
+# Keep DAG-integrity tests + exceptions under version control (Astro convention);
+# ignore only machine-local Astro state.
+**/.astro/config.yaml
+**/.astro/config.yaml.lock
+**/.astro/*.local.yml
+**/.astro/*.local.yaml
+**/.astro/standalone/
+
+# --- Terraform ---
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+
+# --- OS / IDE ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Local-only notes (personal marketing copy, not for the public repo) ---
+docs/linkedin-copy.md
+docs/project-deep-dive.md

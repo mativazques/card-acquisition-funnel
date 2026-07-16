@@ -1,0 +1,46 @@
+name: card_acquisition_funnel
+version: 1.0.0
+config-version: 2
+
+# Connection profile — defined in profiles.yml (env-driven, not committed).
+profile: card_acquisition_funnel
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  # Santander Product Recommendation panel ends May 2016. This is the effective
+  # snapshot end date. Cohorts acquired after (snapshot_end - N months) are
+  # right-censored at the msa_N window (e.g. msa_6 -> acquired after Nov 2015).
+  # Used by the intermediate and mart layers to flag is_cell_right_censored.
+  snapshot_end: "2016-05-01"
+
+# Layered dimensional model on BigQuery.
+# Staging = views (cheap, reproducible from raw);
+# Intermediate = ephemeral (never written to disk — in-query CTEs);
+# Marts = tables (serving layer consumed by BI + the copilot + agents).
+#
+# DECISION (D9): fct_customer_month is a TABLE (not a VIEW), partitioned by
+# DATE_TRUNC(snapshot_month, MONTH), clustered by acq_month and segmento.
+# The Santander panel is ~13M rows; a VIEW causes 3-8 s per-query scan latency
+# on every Streamlit/semantic-layer call. Storage ~1-2 GB within BQ free tier.
+# This overrides the VIEW pattern from flagship #1 (credit-risk-cockpit) which
+# has only ~2.2M rows.
+models:
+  card_acquisition_funnel:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: ephemeral
+    marts:
+      +materialized: table
+      +schema: marts

@@ -1,0 +1,4 @@
+# dbt transforms. Pinned to the stable 1.9 line for reproducibility
+# (pip otherwise resolves 1.10.x adapters onto pre-release dbt-core).
+dbt-core==1.9.10
+dbt-bigquery==1.9.2
