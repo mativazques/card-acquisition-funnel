@@ -27,7 +27,8 @@ Commits pushed: `714b6e2` (scaffold), `f2cbcc9` (ingest/KGAT + STRING load), `48
 ## Next steps
 
 ### Phase 2 — Semantic layer (governed metrics, defined once; BI + agents share)
-- Define 5 metrics: `cohort_size`, `adoption_rate` (windows `msa_3/6/12`, filter `is_adopted_clean=TRUE`), `time_to_adoption`, `retention_rate` (`ret_1m/2m/3m`), `funnel_conversion`.
+- Define the metrics: `cohort_size`, `adoption_rate` (windows `msa_3/6/12`, filter `is_adopted_clean=TRUE`), `time_to_adoption`, `retention_rate` (`ret_1m/2m/3m`), `funnel_conversion`.
+- **Mix-decomposition metrics (from the D14 narrative — see below):** `adoption_rate_segment_adjusted` (blended rate holding segment mix constant, so mix effect is separated from genuine change) and `segment_mix` / acquisition-composition (segment & channel share by cohort). These let BI + agents say "the top-line moved because of mix, not the card offer."
 - 4 governed tools: `list_metrics`, `query_metric`, `compare_cohorts`, `explain_metric`. **Text-to-metric, never text-to-SQL.** Window enum is MSA vocabulary (`msa_3/6/12`, `ret_*`, `lifetime`), NOT #1's MOB.
 - Open design question: is the semantic layer a FastAPI module (like flagship #1) or an MCP-native definition file that both FastAPI and the ADK agents consume? Decide before building.
 
@@ -40,5 +41,7 @@ Commits pushed: `714b6e2` (scaffold), `f2cbcc9` (ingest/KGAT + STRING load), `48
 ### Phase 4 — Polish & deploy
 - Cloud Run (`min-instances=0`), Terraform (serving layer only — data layer stays bootstrapped so IaC can't destroy loaded data), `make hydrate/trim/teardown`, README screenshots/GIF (proactive digest first), cross-link from #1.
 
-## Analytical note (for the digest to narrate honestly)
-Card adoption is genuinely low (~1,100 clean adopters of 155k within-panel; msa_6 rates ~0.2–1.7%) — it's cross-sell of one specific card over a short window. There's a real signal: a 4–5× step-down in adoption from early- to late-2015 cohorts. That's material for the Phase 3 digest.
+## Lead narrative (chosen — see DECISIONS.md D14)
+The story is **not** "adoption is low." The blended card-adoption rate falls ~7× across 2015 (Q1 2.61% → Q3 0.38%), but that's **mostly a composition illusion**: acquisition mix flips from ~85% PARTICULARES (H1-2015) to ~76% UNIVERSITARIO (H2-2015), and students adopt the card at ~0.18% regardless of income. Holding segment constant (PARTICULARES only) adoption still declines but far less — 2.65% → 1.47% (~1.8×), a modest *genuine* softening. So: dominant mix effect (Simpson's-paradox flavor) + a smaller real decline. Heterogeneity is large — ~16× by segment×income, ~4× by channel.
+
+Narrative line: *"the blended funnel rate is a vanity metric — what moved is acquisition mix and channel quality, not the card offer."* Interview-defensible (standard portfolio mix decomposition), actionable (re-target PARTICULARES / high-income / best channels), and native fuel for the Phase 3 digest + critic (guard against naive top-line reads; surface the mix drift). Honesty caveat: within-segment decline rests on smaller n → narrate as directional; min-n guard still applies.

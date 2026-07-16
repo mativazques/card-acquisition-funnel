@@ -107,3 +107,24 @@ pipeline, not reactive Q&A; (d) the README/demo lead with the proactive digest a
 warning, not the curves; (e) a named "Why multi-agent?" defense section is added to the
 BLUEPRINT with two honest reasons: parallel decomposition and auditable separation of
 responsibilities.
+
+## D14 — Lead narrative = acquisition-mix decomposition, not "low adoption"
+Post-Phase-1 data reconnaissance (queries on `fct_customer`) reframed the story. The
+blended card-adoption rate falls ~7x across 2015 (Q1 2.61% → Q3 0.38%), but this is
+**mostly a composition illusion**: acquisition mix flips from ~85% PARTICULARES in H1-2015
+to ~76% UNIVERSITARIO in H2-2015, and UNIVERSITARIO customers adopt the card at ~0.18%
+(students essentially never take it, regardless of income). Holding segment constant
+(PARTICULARES only), adoption still declines but far less — 2.65% → 1.47% (~1.8x), a
+smaller *genuine* within-segment softening. So the top-line is a textbook mix effect
+(Simpson's-paradox flavor) layered over a modest real decline. Heterogeneity is large:
+~16x by segment×income (TOP/high 3.08% vs UNIVERSITARIO 0.19%), ~4x by channel (6.6% vs
+1.7%). **Decision:** the lead analytical narrative is *"the blended funnel rate is a vanity
+metric — what moved is acquisition mix and channel quality, not the card offer,"* which is
+(a) more interview-defensible (standard portfolio-analyst mix decomposition), (b) actionable
+(re-target PARTICULARES / high-income / best channels), (c) native fuel for the Phase 3
+proactive digest + deterministic critic (guard against naive top-line reads; surface the
+mix-drift). Stays 100% inside the credit-card domain — no product switch. **Consequence for
+Phase 2:** the semantic layer gains a mix-adjusted adoption metric (segment held constant)
+plus a first-class `segment_mix` / acquisition-composition metric, so BI and the agents can
+separate mix effect from genuine change. Caveat to honor: the within-segment decline rests
+on smaller n — narrate as directional, and the min-n guard (D10) still applies.

@@ -396,6 +396,14 @@ Airflow task chain: `dbt_test_pass >> generate_digest >> upsert_digest_cache`.
 - `retention_rate` (rate; `ret_1m/2m/3m`) — still holding at +N months / adopted (monthly
   granularity — disclosed).
 - `funnel_conversion` (rate; stage-pair windows `acquired_to_adopted`, `adopted_to_retained`).
+- `segment_mix` (composition; per cohort) — segment & channel share of each acquisition
+  cohort. First-class because the acquisition mix drift (D14) is the lead finding, not a
+  footnote: mix flips from ~85% PARTICULARES to ~76% UNIVERSITARIO across 2015.
+- `adoption_rate_segment_adjusted` (rate; `msa_3/6/12`) — the blended `adoption_rate`
+  reweighted to a fixed reference segment mix, so a mix shift cannot masquerade as a change
+  in the card offer. This is the metric that lets BI + the critic separate the dominant mix
+  effect from the smaller genuine within-segment decline (D14). Same `is_adopted_clean`
+  numerator + `fully_observed` filter as `adoption_rate`.
 - **Window enum** (funnel vocabulary, NOT #1's MOB): `msa_3, msa_6, msa_12` (months-since-
   acquisition), `ret_1m, ret_2m, ret_3m`, `acquired_to_adopted, adopted_to_retained`,
   `lifetime`. Each metric declares valid windows; invalid → structured error, not SQL.
