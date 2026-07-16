@@ -1,0 +1,254 @@
+"""Card Acquisition Funnel — BI dashboard (Phase 1).
+
+Three views over the governed analytics marts:
+  * Adoption vintage curves  — cumulative adoption rate by msa, one line per cohort.
+                               Right-censored cells shown as dashed lines or hidden.
+  * Funnel waterfall         — acquired → adopted → retained (3m), stage counts.
+  * Cohort x segment heatmap — adoption_rate by (acq_month x segmento), fully-observed.
+
+Reads only the small aggregated marts, never raw source tables.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+# App dir on path so imports resolve correctly when run via `streamlit run app/main.py`
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from queries import load_adoption_curves, load_cohort_heatmap, load_funnel_counts  # noqa: E402
+
+st.set_page_config(
+    page_title="Card Acquisition Funnel",
+    page_icon=None,
+    layout="wide",
+)
+
+st.title("Card Acquisition Funnel")
+st.caption(
+    "Acquisition → adoption → retention analytics on the Santander Product Recommendation "
+    "panel (Kaggle 2016). Within-panel acquirees only (~155k). "
+    "Left-censored customers excluded (0.06%). Monthly retention granularity. "
+    "Public/synthetic data — see repository data footer."
+)
+
+vintage_tab, funnel_tab, heatmap_tab = st.tabs(
+    ["Adoption vintage curves", "Funnel waterfall", "Cohort × segment heatmap"]
+)
+
+
+# ── Visual 1: Adoption vintage curves ────────────────────────────────────────────
+with vintage_tab:
+    df = load_adoption_curves()
+
+    left, right = st.columns([1, 3])
+    with left:
+        all_cohorts = sorted(df["acq_month_label"].unique())
+        default_cohorts = all_cohorts  # show all by default; user can filter
+        cohorts = st.multiselect(
+            "Acquisition cohorts",
+            all_cohorts,
+            default=default_cohorts,
+            help="Select cohorts to plot. Each line = one acquisition-month cohort.",
+        )
+        observed_only = st.checkbox(
+            "Fully-observed cells only",
+            value=False,
+            help=(
+                "When checked, hide right-censored MSA points "
+                "(cells where the cohort had insufficient panel time). "
+                "When unchecked, censored cells are shown as dashed lines."
+            ),
+        )
+        max_msa = st.slider(
+            "Max MSA to display",
+            min_value=1,
+            max_value=int(df["msa"].max()),
+            value=int(df["msa"].max()),
+        )
+
+    with right:
+        if not cohorts:
+            st.info("Select at least one cohort in the sidebar.")
+        else:
+            view = df[df["acq_month_label"].isin(cohorts) & (df["msa"] <= max_msa)]
+
+            if observed_only:
+                view = view[view["fully_observed_n"]]
+                fig = px.line(
+                    view,
+                    x="msa",
+                    y="adoption_rate",
+                    color="acq_month_label",
+                    labels={
+                        "msa": "Months since acquisition (MSA)",
+                        "adoption_rate": "Cumulative adoption rate",
+                        "acq_month_label": "Acquisition cohort",
+                    },
+                    title="Cumulative card-adoption rate by MSA — fully-observed cells",
+                )
+            else:
+                # Separate observed vs censored for visual distinction
+                observed = view[view["fully_observed_n"]]
+                censored = view[~view["fully_observed_n"]]
+
+                fig = px.line(
+                    observed,
+                    x="msa",
+                    y="adoption_rate",
+                    color="acq_month_label",
+                    labels={
+                        "msa": "Months since acquisition (MSA)",
+                        "adoption_rate": "Cumulative adoption rate",
+                        "acq_month_label": "Acquisition cohort",
+                    },
+                    title="Cumulative card-adoption rate by MSA",
+                )
+                # Overlay right-censored tails as dashed grey lines
+                cohort_colors = {
+                    trace.name: trace.line.color
+                    for trace in fig.data
+                    if hasattr(trace, "line")
+                }
+                added_legend = set()
+                for cohort, grp in censored.groupby("acq_month_label"):
+                    show_in_legend = cohort not in added_legend
+                    fig.add_trace(
+                        go.Scatter(
+                            x=grp["msa"],
+                            y=grp["adoption_rate"],
+                            mode="lines",
+                            line=dict(dash="dash", color="rgba(150,150,150,0.6)"),
+                            name="Right-censored (lower bound)",
+                            legendgroup="censored",
+                            showlegend=show_in_legend,
+                        )
+                    )
+                    added_legend.add(cohort)
+
+            fig.update_yaxes(tickformat=".1%")
+            fig.update_xaxes(dtick=1)
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "Solid lines: fully-observed cells. "
+                "Dashed grey: right-censored MSA points — cohort did not have enough "
+                "panel time; these are lower bounds, not final adoption rates. "
+                "Toggle 'Fully-observed cells only' to hide them."
+            )
+
+
+# ── Visual 2: Funnel waterfall ────────────────────────────────────────────────────
+with funnel_tab:
+    fdf = load_funnel_counts()
+    acquired = int(fdf["acquired"].iloc[0])
+    adopted = int(fdf["adopted"].iloc[0])
+    retained = int(fdf["retained_3m"].iloc[0])
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Acquired (panel cohort)", f"{acquired:,}")
+    k2.metric("Adopted (clean)", f"{adopted:,}", delta=f"{adopted / acquired:.1%} of acquired")
+    k3.metric(
+        "Retained (3m)",
+        f"{retained:,}",
+        delta=f"{retained / adopted:.1%} of adopted" if adopted else "—",
+    )
+    k4.metric(
+        "Overall adoption rate",
+        f"{adopted / acquired:.1%}" if acquired else "—",
+    )
+
+    stages = ["Acquired", "Adopted", "Retained 3m"]
+    counts = [acquired, adopted, retained]
+    pcts = [
+        "100%",
+        f"{adopted / acquired:.1%}" if acquired else "—",
+        f"{retained / acquired:.1%}" if acquired else "—",
+    ]
+
+    fig = go.Figure(
+        go.Funnel(
+            y=stages,
+            x=counts,
+            textposition="inside",
+            textinfo="value+percent initial",
+            marker=dict(color=["#1f6feb", "#388bfd", "#79c0ff"]),
+            connector=dict(line=dict(color="rgba(100,100,100,0.3)", width=1)),
+        )
+    )
+    fig.update_layout(
+        title="Acquisition funnel — within-panel cohort",
+        yaxis_title="",
+        xaxis_title="Customers",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "Denominator: customers whose acquisition month falls within the 17-month "
+        "panel window (2015-01 to 2016-05). Left-censored customers (0.06%) excluded "
+        "from adopted count. Retention is 3-month card retention after first adoption. "
+        "'Retained 3m' is a lower bound — panel truncation at May 2016 limits "
+        "late cohorts."
+    )
+
+
+# ── Visual 3: Cohort × segment heatmap ───────────────────────────────────────────
+with heatmap_tab:
+    hdf = load_cohort_heatmap()
+
+    if hdf.empty:
+        st.warning("No fully-observed cohort x segment cells found.")
+    else:
+        total_cells = len(hdf)
+        st.caption(
+            f"Showing {total_cells} cells — fully-observed cohorts only "
+            "(acq_month + 6 months ≤ panel end 2016-05). "
+            "Later cohorts are excluded to avoid presenting censored rates as final."
+        )
+
+        pivot = hdf.pivot_table(
+            index="acq_month_label",
+            columns="segmento",
+            values="adoption_rate",
+            aggfunc="mean",
+        )
+        pivot = pivot.sort_index()
+
+        fig = px.imshow(
+            pivot,
+            labels={
+                "x": "Segment",
+                "y": "Acquisition cohort",
+                "color": "Adoption rate",
+            },
+            color_continuous_scale="Blues",
+            aspect="auto",
+            text_auto=".1%",
+            title="Card adoption rate by cohort × segment (fully-observed, msa_6+)",
+        )
+        fig.update_coloraxes(colorbar_tickformat=".0%")
+        st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Raw data"):
+            st.dataframe(
+                hdf[
+                    [
+                        "acq_month_label",
+                        "segmento",
+                        "cohort_size",
+                        "n_adopted",
+                        "adoption_rate",
+                        "n_right_censored",
+                        "fully_observed_12",
+                    ]
+                ].sort_values(["acq_month_label", "segmento"]),
+                hide_index=True,
+                use_container_width=True,
+            )
+        st.caption(
+            "Segment codes from Santander panel: '01 - TOP', '02 - PARTICULARES', "
+            "'03 - UNIVERSITARIO', 'unknown' (NULL in source). "
+            "Cells with fully_observed_12=true have 12 full panel months of observation."
+        )
