@@ -3,7 +3,7 @@
 Living tracker for the card-acquisition-funnel build. Read this first when resuming.
 Full spec is in [BLUEPRINT.md](BLUEPRINT.md); decision log in [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-07-16 — Phases 0 and 1 complete and pushed to `origin/main`._
+_Last updated: 2026-07-17 — Phases 0, 1 and 2 complete and pushed to `origin/main`._
 
 ## Done
 
@@ -19,18 +19,20 @@ _Last updated: 2026-07-16 — Phases 0 and 1 complete and pushed to `origin/main
 - **Streamlit BI** (`app/`): 3 tabs — adoption vintage curves (right-censored cells dashed + "fully-observed only" toggle), funnel waterfall (acquired→adopted→retained), cohort×segment heatmap. Visually QA'd in-browser, no console errors.
 - **Airflow (local, Astro + Cosmos)** (`airflow/`): DAG `card_acquisition_pipeline` = `ingest >> dbt`. Cosmos renders one task per dbt model + its tests. **Verified by a real Cosmos render (`dbt ls`) → 18 tasks**, not just `py_compile`.
 
+### Phase 2 — Semantic layer (governed metrics, defined once; BI + agents share)
+- **Framework-neutral `semantic/` package** (D15): `windows.py` (MSA enum — `msa_3/6/12`, `ret_1m/2m/3m`, `acquired_to_adopted`/`adopted_to_retained`, `lifetime`), `errors.py` (`SemanticError`), `metrics.py` (registry), `layer.py` (the 4 governed tools). Zero web/LLM/MCP deps; Streamlit imports it directly; Phase-3 FastAPI/ADK/MCP will each wrap the same functions.
+- **7 governed metrics**, defined once: `cohort_size`, `adoption_rate` (`msa_3/6/12`, `is_adopted_clean` numerator, fully-observed cells only), `adoption_rate_segment_adjusted` (D14 mix-hold via direct standardization — D16), `time_to_adoption`, `retention_rate` (`ret_1m/2m/3m`), `funnel_conversion` (`acquired_to_adopted`/`adopted_to_retained`), `segment_mix` (compositional). **Text-to-metric, never text-to-SQL.**
+- **4 governed tools:** `list_metrics`, `query_metric`, `compare_cohorts` (rejects compositional metrics), `explain_metric` (definition + windows + honesty caveats, $0 lookup).
+- **Supporting dbt mart** `mart_adoption_curves_by_segment` (acq_month×segmento×msa) — the grain `adoption_rate_segment_adjusted` needs. `dbt build` = 12/12 tests PASS on it; 11 offline semantic contract tests in `tests/test_semantic.py` PASS.
+- Streamlit shows a "Governed metric definitions (semantic layer)" expander from `list_metrics()`.
+- **Verified live (msa_6):** blended adoption falls 1.54%→0.24% (2015-01→2015-09, ~6.4x) but segment-adjusted only 0.84%→0.52% (~1.6x) — ~¾ of the top-line move is mix, confirming D14.
+
 Commits pushed: `714b6e2` (scaffold), `f2cbcc9` (ingest/KGAT + STRING load), `48d3360` (dbt), `95d27c3` (Streamlit), `dde1eeb` (Airflow).
 
 ## Reproduce
-`make hydrate` (accept Kaggle rules first) → `cd dbt && dbt deps && dbt build` → `streamlit run app/main.py`. Env from `.env` (see `.env.example`). Marts land in BigQuery dataset `analytics_marts`.
+`make hydrate` (accept Kaggle rules first) → `cd dbt && dbt deps && dbt build` → `streamlit run app/main.py`. Semantic contract tests: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_semantic.py`. Env from `.env` (see `.env.example`). Marts land in BigQuery dataset `analytics_marts`.
 
 ## Next steps
-
-### Phase 2 — Semantic layer (governed metrics, defined once; BI + agents share)
-- Define the metrics: `cohort_size`, `adoption_rate` (windows `msa_3/6/12`, filter `is_adopted_clean=TRUE`), `time_to_adoption`, `retention_rate` (`ret_1m/2m/3m`), `funnel_conversion`.
-- **Mix-decomposition metrics (from the D14 narrative — see below):** `adoption_rate_segment_adjusted` (blended rate holding segment mix constant, so mix effect is separated from genuine change) and `segment_mix` / acquisition-composition (segment & channel share by cohort). These let BI + agents say "the top-line moved because of mix, not the card offer."
-- 4 governed tools: `list_metrics`, `query_metric`, `compare_cohorts`, `explain_metric`. **Text-to-metric, never text-to-SQL.** Window enum is MSA vocabulary (`msa_3/6/12`, `ret_*`, `lifetime`), NOT #1's MOB.
-- Open design question: is the semantic layer a FastAPI module (like flagship #1) or an MCP-native definition file that both FastAPI and the ADK agents consume? Decide before building.
 
 ### Phase 3 — Proactive multi-agent layer (the primary differentiator)
 - Google ADK self-hosted (same Cloud Run container, NOT Vertex Agent Engine): planner → analysts → **deterministic critic gate** → narrator.

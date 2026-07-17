@@ -128,3 +128,30 @@ Phase 2:** the semantic layer gains a mix-adjusted adoption metric (segment held
 plus a first-class `segment_mix` / acquisition-composition metric, so BI and the agents can
 separate mix effect from genuine change. Caveat to honor: the within-segment decline rests
 on smaller n — narrate as directional, and the min-n guard (D10) still applies.
+
+## D15 — Semantic layer is a framework-neutral Python package (not FastAPI-owned, not MCP-owned)
+The open Phase-2 question was whether the governed metrics live inside the FastAPI copilot
+module (as they effectively do in flagship #1, under `copilot/tools.py`) or in an MCP-native
+definition file. **Decision:** neither — the metric definitions live in a standalone,
+framework-neutral `semantic/` package (`windows.py`, `errors.py`, `metrics.py`, `layer.py`)
+that has zero web/LLM/MCP dependencies. Streamlit imports it directly today; in Phase 3 the
+reactive FastAPI copilot, the proactive ADK digest, and the thin MCP wrapper each *wrap* the
+same four functions (`list_metrics`, `query_metric`, `compare_cohorts`, `explain_metric`) —
+adding error-as-data + `TOOL_DECLARATIONS` at the edge — rather than owning the definitions.
+Rationale: (a) no single consumer owns the source of truth, so BI and every agent path speak
+one vocabulary; (b) the layer is unit-testable offline with no HTTP/LLM/BigQuery mocking;
+(c) it improves on #1, where the tool contract and the metric registry are slightly coupled
+in `copilot/`. **Consequence:** Phase 2 ships `semantic/` + a supporting dbt mart
+(`mart_adoption_curves_by_segment`, the acq_month×segmento×msa grain the segment-adjusted
+metric needs); the FastAPI/ADK/MCP wrappers are deferred to Phase 3 as planned.
+
+## D16 — adoption_rate_segment_adjusted via direct standardization to a pooled reference mix
+`adoption_rate_segment_adjusted` (the D14 mix-decomposition metric) is computed by direct
+standardization: each cohort's per-segment adoption rate is reweighted to a FIXED reference
+segment mix — the pooled segment shares across all within-panel cohorts — so a mix shift
+cannot masquerade as a change in the card offer. The denominator renormalizes on the sum of
+present weights, so a cohort missing a segment cell (e.g. right-censored) is not penalized.
+Verified live (msa_6): the blended rate falls 1.54% (2015-01) → 0.24% (2015-09), a ~6.4x
+drop, while the segment-adjusted rate falls only 0.84% → 0.52% (~1.6x). `compare_cohorts`
+attributes ~1.30 pp of the ~1.30 pp blended gap to mix and ~0.32 pp to genuine within-segment
+change — i.e. roughly three-quarters of the top-line move is composition, confirming D14.

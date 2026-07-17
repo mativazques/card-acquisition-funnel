@@ -17,10 +17,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# App dir on path so imports resolve correctly when run via `streamlit run app/main.py`
+# App dir + repo root on path so `queries` resolves when run via
+# `streamlit run app/main.py` and the governed `semantic` layer imports as the single
+# source of truth shared with the copilot/agents (rather than being redefined here).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from queries import load_adoption_curves, load_cohort_heatmap, load_funnel_counts  # noqa: E402
+from semantic import list_metrics  # noqa: E402
 
 st.set_page_config(
     page_title="Card Acquisition Funnel",
@@ -35,6 +39,26 @@ st.caption(
     "Left-censored customers excluded (0.06%). Monthly retention granularity. "
     "Public/synthetic data — see repository data footer."
 )
+
+with st.expander("Governed metric definitions (semantic layer)"):
+    st.caption(
+        "Every chart and every copilot answer computes these metrics — defined once in "
+        "the governed semantic layer, text-to-metric never text-to-SQL. Windows use the "
+        "MSA (months-since-acquisition) vocabulary."
+    )
+    st.dataframe(
+        [
+            {
+                "Metric": m["label"],
+                "Definition": m["description"],
+                "Unit": m["unit"],
+                "Valid windows": ", ".join(m["valid_windows"]),
+            }
+            for m in list_metrics()
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
 
 vintage_tab, funnel_tab, heatmap_tab = st.tabs(
     ["Adoption vintage curves", "Funnel waterfall", "Cohort × segment heatmap"]

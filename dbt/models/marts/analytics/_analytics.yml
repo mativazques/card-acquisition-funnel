@@ -58,6 +58,58 @@ models:
             - acq_month
             - msa
 
+  - name: mart_adoption_curves_by_segment
+    description: >
+      Adoption vintage triangle at segment grain — cumulative card-adoption rate by
+      (acq_month x segmento x msa). Same construction as mart_adoption_curves but
+      keeps the segment dimension, so the semantic layer can hold segment mix constant
+      when computing adoption_rate_segment_adjusted (the D14 mix-decomposition metric
+      that separates the dominant acquisition-mix drift from genuine within-segment
+      change). Restricted to within-panel acquirees; numerator is is_adopted_clean.
+    columns:
+      - name: acq_month
+        description: Acquisition cohort month (DATE; first day of month).
+        data_tests: [not_null]
+      - name: segmento
+        description: Customer segment. 'unknown' if NULL in source.
+        data_tests: [not_null]
+      - name: msa
+        description: Months-since-acquisition (integer, 0..17). MSA vocabulary, not MOB.
+        data_tests: [not_null]
+      - name: as_of_month
+        description: Calendar month this msa corresponds to (acq_month + msa months).
+        data_tests: [not_null]
+      - name: n_observed
+        description: Customers in this cohort x segment cell (stable across msa).
+        data_tests: [not_null]
+      - name: n_adopted_clean
+        description: Cumulative clean adopters by this msa in this cell.
+        data_tests: [not_null]
+      - name: adoption_rate
+        description: >
+          Cumulative card-adoption rate at this msa for this segment: n_adopted_clean
+          / n_observed. Right-censored cells are lower bounds, not final rates.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              inclusive: true
+      - name: is_cell_right_censored
+        description: >
+          True if acq_month + msa months > 2016-05-01 (snapshot_end). The
+          segment-adjusted metric consumes only fully-observed cells.
+        data_tests: [not_null]
+      - name: fully_observed_n
+        description: Convenience inverse of is_cell_right_censored.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - acq_month
+            - segmento
+            - msa
+
   - name: mart_cohort_adoption
     description: >
       Cohort adoption summary — one row per (acq_month x segmento) with adoption,
