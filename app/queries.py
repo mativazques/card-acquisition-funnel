@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+from google.api_core.exceptions import NotFound
 
 from config import GCP_PROJECT, MARTS_DATASET, get_client, marts_table
 
@@ -81,3 +82,40 @@ def load_cohort_heatmap() -> pd.DataFrame:
     df = get_client().query(sql).to_dataframe()
     df["acq_month_label"] = df["acq_month"].astype(str).str[:7]
     return df
+
+
+@st.cache_data(ttl=_TTL)
+def load_latest_digest(window: str = "msa_6") -> dict | None:
+    """The most recent proactive digest for a window, from the pre-generated cache.
+
+    Reads only faithful digests (the honesty gate already refuses to cache an unfaithful
+    one, but we filter defensively). Returns None when the cache table does not exist yet —
+    e.g. the digest job has not run — so the panel can degrade gracefully instead of erroring.
+    """
+    sql = f"""
+        select cohort_month, metric_window, generated_at, prose, material_findings,
+               findings_json, suppressed_json, notes_json
+        from {marts_table('mart_digest_cache')}
+        where metric_window = @window and faithful = true
+        order by generated_at desc
+        limit 1
+    """
+    from google.cloud import bigquery
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("window", "STRING", window)]
+    )
+    try:
+        rows = list(get_client().query(sql, job_config=job_config).result())
+    except NotFound:
+        return None
+    if not rows:
+        return None
+    r = rows[0]
+    return {
+        "cohort_month": r["cohort_month"],
+        "window": r["metric_window"],
+        "generated_at": r["generated_at"],
+        "prose": r["prose"],
+        "material_findings": r["material_findings"],
+    }

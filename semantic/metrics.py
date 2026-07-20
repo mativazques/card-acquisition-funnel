@@ -39,6 +39,10 @@ class Metric:
     build_sql: Callable[[Window, MartTable], str]
     caveats: tuple[str, ...] = ()
     compositional: bool = False
+    # Optional per-segment breakdown (D17): returns rows of (cohort, segment, value, n).
+    # Only metrics with a real cohort x segmento x msa grain expose this — the by-segment
+    # analyst slice and the critic's min-n guard consume the per-cell value AND n.
+    build_segment_sql: Callable[[Window, MartTable], str] | None = None
 
     def supports(self, window: Window) -> bool:
         return window in self.valid_windows
@@ -64,6 +68,22 @@ def _adoption_rate_sql(w: Window, mt: MartTable) -> str:
         from {mt(CURVES)}
         where msa = {msa} and is_cell_right_censored = false
         group by acq_month
+    """
+
+
+def _adoption_rate_by_segment_sql(w: Window, mt: MartTable) -> str:
+    # Per-segment breakdown (D17): one fully-observed cell per (cohort, segmento) at msa=N,
+    # carrying both the adoption rate (value) and the cell size (n). The min-n guard reads
+    # `n` and the by-segment analyst reads `value` — both from this one governed call.
+    msa = WINDOW_MSA[w]
+    return f"""
+        select format_date('%Y-%m', acq_month) as cohort,
+               segmento as segment,
+               adoption_rate as value,
+               n_observed as n
+        from {mt(CURVES_SEG)}
+        where msa = {msa} and is_cell_right_censored = false
+        order by acq_month, segmento
     """
 
 
@@ -184,6 +204,7 @@ METRICS: dict[str, Metric] = {
             unit="rate",
             valid_windows=_MSA_WINDOWS,
             build_sql=_adoption_rate_sql,
+            build_segment_sql=_adoption_rate_by_segment_sql,
             caveats=(_CLEAN_NUMERATOR_CAVEAT, _RIGHT_CENSOR_CAVEAT),
         ),
         Metric(

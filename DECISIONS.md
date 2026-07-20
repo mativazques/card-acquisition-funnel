@@ -155,3 +155,54 @@ Verified live (msa_6): the blended rate falls 1.54% (2015-01) → 0.24% (2015-09
 drop, while the segment-adjusted rate falls only 0.84% → 0.52% (~1.6x). `compare_cohorts`
 attributes ~1.30 pp of the ~1.30 pp blended gap to mix and ~0.32 pp to genuine within-segment
 change — i.e. roughly three-quarters of the top-line move is composition, confirming D14.
+
+## D17 — Per-segment metric access via an optional `dimension` param on `query_metric` (not a 5th tool)
+The Phase-3 "by-segment" analyst slice and the critic's min-n guard both need adoption
+**broken down by segment cell** (adoption rate AND n per cohort×segmento), but Phase-2's
+`query_metric('adoption_rate')` returns only the segment-blended value with no n. **Decision:**
+extend the existing `query_metric` with an optional `dimension="segmento"` argument that reads
+`mart_adoption_curves_by_segment` and returns one row per segment carrying both `value` and
+`n` — rather than adding a 5th governed tool. Rationale: keeps the governed surface at four
+tools (the number the README sells), reuses a mart that already exists, and the min-n guard
+gets its `n` from the same governed call instead of reaching around the semantic layer.
+Rejected alternative: a separate `query_metric_by_segment` tool (more surface, same result).
+
+## D18 — `mart_digest_cache` is written by the digest job, NOT a dbt model
+The digest cache is accumulated state (one persisted digest per cohort-month), not a
+transformation. If it were a dbt model, every `dbt build` would drop and rebuild it, wiping
+stored digests. **Decision:** the digest job creates it with `CREATE TABLE IF NOT EXISTS`
+and upserts into it; dbt never owns it. Invalidation stays keyed on `(cohort_month,
+dbt_run_id)` so a dbt re-run forces regeneration without dbt destroying the table. This is
+consistent with the "data layer stays bootstrapped so IaC can't destroy loaded data" lesson.
+
+## D19 — Provider: AI Studio free tier is the demo default; Vertex is a documented prod path via one env var
+The BLUEPRINT was always internally consistent on **AI Studio free tier** ($0, 1,500 req/day
+hard ceiling) as the provider the demo actually runs on, with **Vertex named only as the
+documented production path** (BLUEPRINT lines 328, 415, 426; D6; the D14-inherited row). The
+Phase-3 kickoff message and the root `CLAUDE.md` line ("Vertex AI Gemini for now") introduced
+apparent ambiguity, but there is no real conflict: **Decision:** the demo runs on AI Studio
+free tier (needs a Gemini API key in `.env`, never committed) to honour the "$0 / free tier
+in everything we build" rule, and Vertex remains a one-line-in-the-README prod path toggled
+by `GOOGLE_GENAI_USE_VERTEXAI=true` (ADK / `google-genai` support both backends with the same
+code — no architecture change). We never run Vertex in the demo; we only document that it
+scales there. README "$0" wording is kept literal (AI Studio), with Vertex framed as
+"production would route to Vertex AI for governance/data-residency".
+
+## D20 — ADK powers the reactive copilot's tool-calling loop; the deterministic digest uses google-genai directly
+BLUEPRINT line 417 reads "ADK for the proactive multi-agent digest", which taken literally
+would put Google ADK inside the digest pipeline. **Decision:** ADK earns its place in the
+*reactive copilot* — `build_governed_agent` / `adk_generator` in `agents/copilot.py` run a
+genuine multi-turn `LlmAgent` + `InMemoryRunner` tool-calling loop where the model decides
+which of the four governed tools to call. The *proactive digest*, by contrast, is
+deterministic by design (D5): planner → parallel analysts → **deterministic** critic gate →
+narrator, where orchestration is plain Python and only the single narrator step calls an LLM.
+Wrapping that lone, structured narrator call in an ADK agent would be gratuitous (Golden Rule
+#3) — it has no tools to call and no turns to take — so the narrator uses `google-genai`
+directly (`agents/narrator.py`, `genai_generator`). Consequences: (a) ADK is genuinely
+exercised (D6 honoured) but only where a real agentic loop exists; (b) the Airflow digest
+container runs a **light** `agents_venv` with `google-genai` only (no `google-adk`), keeping
+the pipeline image small and dependency-clean; (c) the two LLM entrypoints stay separate —
+`adk_generator` (copilot, tool-calling) vs `genai_generator` (narrator, single structured
+call) — both injected as `Callable[[str], str]` so all orchestration is offline-testable.
+Rejected alternative: force ADK into the digest narrator for literal BLUEPRINT fidelity —
+more deps, heavier Airflow image, zero added capability.

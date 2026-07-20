@@ -3,7 +3,7 @@
 Living tracker for the card-acquisition-funnel build. Read this first when resuming.
 Full spec is in [BLUEPRINT.md](BLUEPRINT.md); decision log in [DECISIONS.md](DECISIONS.md).
 
-_Last updated: 2026-07-17 — Phases 0, 1 and 2 complete and pushed to `origin/main`._
+_Last updated: 2026-07-20 — Phases 0, 1, 2 and 3 complete and pushed to `origin/main`. Phase 3 (sub-phases 3a–3e): 81 offline agent tests + 18 semantic contract tests pass; deterministic spine + digest cache live-verified against BigQuery. **One path stays unverified: the live LLM smoke test (digest narrator + copilot `/ask`)** — blocked on a real AI Studio `GEMINI_API_KEY` (`.env` is still the placeholder). Everything else is committed, pushed and green._
 
 ## Done
 
@@ -27,18 +27,28 @@ _Last updated: 2026-07-17 — Phases 0, 1 and 2 complete and pushed to `origin/m
 - Streamlit shows a "Governed metric definitions (semantic layer)" expander from `list_metrics()`.
 - **Verified live (msa_6):** blended adoption falls 1.54%→0.24% (2015-01→2015-09, ~6.4x) but segment-adjusted only 0.84%→0.52% (~1.6x) — ~¾ of the top-line move is mix, confirming D14.
 
-Commits pushed: `714b6e2` (scaffold), `f2cbcc9` (ingest/KGAT + STRING load), `48d3360` (dbt), `95d27c3` (Streamlit), `dde1eeb` (Airflow).
+### Phase 3 — Proactive multi-agent layer + reactive copilot (complete, committed & pushed)
+Runtime isolation: agent code runs in **`.venv-agents`** (Python 3.12, `google-adk` 1.18.0 + `google-genai` 1.46.0, protobuf 6.x), separate from **`.venv`** (Python 3.9, dbt/Streamlit/semantic, protobuf <6). Splitting them was forced — `google-adk` pulls protobuf 6.x and breaks Streamlit's pin. `agents/requirements.txt` lets `google-adk` resolve its own fastapi/uvicorn/genai stack.
+
+- **3a — tools edge** (`agents/tools.py`): wraps the 4 governed `semantic/` tools with error-as-data + Gemini `TOOL_DECLARATIONS`; D17 `dimension="segmento"` returns per-segment `value` + `n`. No LLM.
+- **3b — deterministic critic** (`agents/critic.py`, `agents/faithfulness.py`): right-censoring suppression (dbt flags) + min-n=50 + materiality (`abs(delta)>=2pp AND >1.5×rolling_SD(3 prior)`, 2pp fallback); numeric-faithfulness token check. Pure Python, offline-tested, built BEFORE any LLM code.
+- **3c — deterministic digest pipeline** (`agents/planner.py` → `analysts.py` parallel → `critic` gate → `narrator.py`): only the narrator calls an LLM (via `google-genai` directly — D20). Narrator sees ONLY the critic struct; causality-prohibition prompt; faithfulness mismatch blocks caching. LLM injected as `Callable[[str], str]` → whole spine offline-testable. **Live-verified against BigQuery** with a stub LLM (cohort 2015-11 @ msa_6, 5 findings, critic_passed=True).
+- **3d — digest cache** (`agents/digest_cache.py`, `agents/digest_job.py`, D18): `mart_digest_cache` created via `CREATE TABLE IF NOT EXISTS` (column `metric_window`, NOT reserved `window`), MERGE upsert keyed on `(cohort_month, dbt_run_id)`. Airflow `generate_digest` task added (`ingest >> transform >> generate_digest`, light `agents_venv`). Streamlit "Insight of the month" panel reads the cache ($0 serve-time), degrades to hidden when empty. **Upsert idempotency + Streamlit readback live-verified**, then smoke-row cleaned up.
+- **3e — reactive copilot** (`agents/copilot.py`, `agents/api.py`, `agents/mcp_server.py`, `agents/hardening.py`): minimal single-agent text-to-metric. **ADK earns its place here** (D20) — `adk_generator` runs a genuine `LlmAgent` + `InMemoryRunner` tool-calling loop. FastAPI `POST /ask` (200 ok / 400 rejected / 429 rate-limited) + `GET /health`; thin FastMCP wrapper exposes the same 4 tools to any MCP client. Hardening L2 input cap → L1 on-topic router → L3 rate limit → L4 answer cache, all before the LLM.
+- **Tests:** 81 pass in `.venv-agents` (planner/analysts/narrator/pipeline/digest_cache/hardening/copilot/api/mcp).
+- **BLOCKED:** live LLM smoke test (digest narrator + copilot) — `.env` `GEMINI_API_KEY` is still the placeholder `your_ai_studio_api_key`. All wiring built + offline-tested; only the real Gemini call is unverified. Needs Matias to drop a real AI Studio key in `.env`.
+- **NOT implemented:** context-caching of system prompt + metric catalog (blueprint L1–L4 "plus context-caching") — only the L1–L4 core shipped. ADK `ContextCacheConfig` exists but was not wired (deferred, low value at this scale).
+
+Commits pushed (Phases 0–2): `714b6e2` (scaffold), `f2cbcc9` (ingest/KGAT + STRING load), `48d3360` (dbt), `95d27c3` (Streamlit), `dde1eeb` (Airflow), `aa4f9ef` (Phase 2 semantic layer). **Phase 3 is committed & pushed.**
 
 ## Reproduce
-`make hydrate` (accept Kaggle rules first) → `cd dbt && dbt deps && dbt build` → `streamlit run app/main.py`. Semantic contract tests: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_semantic.py`. Env from `.env` (see `.env.example`). Marts land in BigQuery dataset `analytics_marts`.
+`make hydrate` (accept Kaggle rules first) → `cd dbt && dbt deps && dbt build` → `streamlit run app/main.py`. Semantic contract tests: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_semantic.py`. **Agent-layer tests (Phase 3):** `PYTHONPATH=. .venv-agents/bin/python -m pytest tests/` (81 pass, no LLM/network). Copilot API locally: `.venv-agents/bin/uvicorn agents.api:app` (needs a real `GEMINI_API_KEY` for a live `/ask`). MCP server: `.venv-agents/bin/python -m agents.mcp_server`. Env from `.env` (see `.env.example`). Marts land in BigQuery dataset `analytics_marts`.
 
 ## Next steps
 
-### Phase 3 — Proactive multi-agent layer (the primary differentiator)
-- Google ADK self-hosted (same Cloud Run container, NOT Vertex Agent Engine): planner → analysts → **deterministic critic gate** → narrator.
-- Critic guards (Python/SQL, not LLM): (a) right-censoring suppression via dbt flags; (b) min-n = 50; (c) materiality = `abs(delta) >= 2pp AND > 1.5×rolling_SD(prior 3 cohorts)`.
-- Digest pre-generated in Airflow for the latest fully-observed cohort at msa_6, served from `mart_digest_cache` ($0 serve-time). Narrator sees only the critic struct; numeric-faithfulness check blocks caching on mismatch.
-- Reactive single-agent Q&A wired here too, but minimal (text-to-metric parity only).
+**Phase 3 is complete, committed & pushed — see the "Phase 3" block under Done above.** One loose end remains before it's fully closed:
+- **Live LLM smoke test** (digest narrator + copilot `/ask`) — needs a real AI Studio `GEMINI_API_KEY` in `.env` (currently the placeholder). Everything else is offline-tested + live-verified against BigQuery; this is the one unverified path. Drop a real key in `.env`, then run `.venv-agents/bin/uvicorn agents.api:app` and `POST /ask`, plus one `agents/run_digest.py` for the narrator.
+- Decisions taken in Phase 3: **D17** (`dimension="segmento"`), **D18** (`mart_digest_cache` owned by the job), **D19** (AI Studio free tier demo / Vertex documented prod path), **D20** (ADK in the copilot tool-calling loop; digest narrator uses `google-genai` directly → light Airflow venv). See DECISIONS.md.
 
 ### Phase 4 — Polish & deploy
 - Cloud Run (`min-instances=0`), Terraform (serving layer only — data layer stays bootstrapped so IaC can't destroy loaded data), `make hydrate/trim/teardown`, README screenshots/GIF (proactive digest first), cross-link from #1.

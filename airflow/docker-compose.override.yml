@@ -8,6 +8,10 @@
 x-mounts: &mounts
   - ../dbt:/usr/local/airflow/dbt:rw
   - ../scripts:/usr/local/airflow/scripts:ro
+  # The digest task imports the governed `agents` + `semantic` packages (one source of
+  # truth, bind-mounted read-only). Run with PYTHONPATH=/usr/local/airflow.
+  - ../agents:/usr/local/airflow/agents:ro
+  - ../semantic:/usr/local/airflow/semantic:ro
   - ${HOME}/.config/gcloud:/home/astro/.config/gcloud:ro
 
 x-env: &env

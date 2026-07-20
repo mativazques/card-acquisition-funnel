@@ -94,22 +94,27 @@ def query_metric(
     metric_id: str,
     window: str | Window = Window.LIFETIME,
     cohort: str | None = None,
+    dimension: str | None = None,
 ) -> dict:
     """Resolve a governed metric to per-cohort values (or one cohort's value).
 
     Scalar metrics return `results = [{"cohort", "value"}]`. Compositional metrics
     (segment_mix) return `results = [{"cohort", "breakdown": [{"dimension", "share"}]}]`.
-    Raises SemanticError (structured) on an unknown metric or an invalid window.
+    With `dimension="segmento"` (D17, supported metrics only) scalar metrics instead
+    return `results = [{"cohort", "segment", "value", "n"}]` per fully-observed cell — the
+    grain the by-segment analyst and the min-n guard consume.
+    Raises SemanticError (structured) on an unknown metric, invalid window, or a dimension
+    that is unknown or unsupported for the metric.
     """
     metric = _resolve_metric(metric_id)
     w = _resolve_window(metric, window)
-    sql = metric.build_sql(w, _marts_table)
-    rows = list(_client().query(sql).result())
 
-    if metric.compositional:
-        results = _shape_compositional(rows)
+    if dimension is not None:
+        results = _query_by_dimension(metric, w, dimension)
+    elif metric.compositional:
+        results = _shape_compositional(list(_client().query(metric.build_sql(w, _marts_table)).result()))
     else:
-        results = _shape_scalar(rows)
+        results = _shape_scalar(list(_client().query(metric.build_sql(w, _marts_table)).result()))
 
     if cohort is not None:
         picked = [r for r in results if r["cohort"] == cohort]
@@ -125,8 +130,32 @@ def query_metric(
         "metric": metric.id,
         "unit": metric.unit,
         "window": w.value,
+        "dimension": dimension,
         "results": results,
     }
+
+
+def _query_by_dimension(metric: Metric, w: Window, dimension: str) -> list[dict]:
+    if dimension != "segmento":
+        raise SemanticError(
+            "dimension_unknown",
+            f"unknown dimension '{dimension}'; supported: ['segmento']",
+        )
+    if metric.build_segment_sql is None:
+        raise SemanticError(
+            "dimension_unsupported",
+            f"metric '{metric.id}' does not support a per-segment breakdown",
+        )
+    rows = list(_client().query(metric.build_segment_sql(w, _marts_table)).result())
+    return _shape_segment(rows)
+
+
+def _shape_segment(rows) -> list[dict]:
+    return [
+        {"cohort": r["cohort"], "segment": r["segment"], "value": r["value"], "n": r["n"]}
+        for r in rows
+        if r["value"] is not None
+    ]
 
 
 def _shape_scalar(rows) -> list[dict]:

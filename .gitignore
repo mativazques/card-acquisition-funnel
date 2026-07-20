@@ -27,6 +27,7 @@ profiles.yml
 __pycache__/
 *.py[cod]
 .venv/
+.venv-agents/
 .venv-app/
 .venv-copilot/
 .venv-mcp/

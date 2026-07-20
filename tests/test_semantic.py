@@ -107,3 +107,36 @@ def test_explain_metric_unknown_is_structured_error():
     with pytest.raises(SemanticError) as exc:
         explain_metric("nope")
     assert exc.value.code == "metric_unknown"
+
+
+# --- D17: per-segment access via query_metric(dimension="segmento") ----------------
+
+def test_adoption_rate_exposes_a_segment_builder():
+    # The by-segment analyst slice and the min-n guard both need per-cell value + n.
+    assert METRICS["adoption_rate"].build_segment_sql is not None
+
+
+def test_adoption_rate_by_segment_sql_returns_value_and_n_per_cell():
+    sql = METRICS["adoption_rate"].build_segment_sql(Window.MSA_6, _MT)
+    assert CURVES_SEG in sql          # reads the acq_month x segmento x msa mart
+    assert "msa = 6" in sql
+    assert "is_cell_right_censored = false" in sql
+    assert " as segment" in sql       # segment dimension surfaced
+    assert " as value" in sql         # adoption_rate as the value
+    assert " as n" in sql             # n_observed surfaced for the min-n guard
+
+
+def test_scalar_metric_has_no_segment_builder():
+    assert METRICS["cohort_size"].build_segment_sql is None
+
+
+def test_query_metric_rejects_unknown_dimension():
+    with pytest.raises(SemanticError) as exc:
+        query_metric("adoption_rate", window="msa_6", dimension="planet")
+    assert exc.value.code == "dimension_unknown"
+
+
+def test_query_metric_rejects_segment_dimension_on_unsupported_metric():
+    with pytest.raises(SemanticError) as exc:
+        query_metric("cohort_size", dimension="segmento")
+    assert exc.value.code == "dimension_unsupported"

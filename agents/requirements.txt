@@ -1,0 +1,16 @@
+# Agent-layer runtime — isolated from the dbt/streamlit venv (.venv, Python 3.9).
+# This layer runs on Python 3.12 in its own venv (.venv-agents) because google-adk
+# pulls protobuf 6.x, which conflicts with streamlit's protobuf<6 pin. Keep them apart.
+#
+#   /opt/homebrew/bin/python3.12 -m venv .venv-agents
+#   .venv-agents/bin/pip install -r agents/requirements.txt
+#
+# The demo bills the AI Studio free tier (GEMINI_API_KEY). Vertex is the documented
+# production path only, toggled by GOOGLE_GENAI_USE_VERTEXAI=true (same code, no rewrite).
+
+# google-adk pins its own fastapi/uvicorn/google-genai — let it resolve that stack
+# rather than fighting the pins. We pin only what ADK does not own.
+google-adk==1.18.0
+google-cloud-bigquery==3.27.0
+python-dotenv==1.0.1
+pytest==8.3.4

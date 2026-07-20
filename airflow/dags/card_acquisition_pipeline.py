@@ -1,11 +1,18 @@
-"""Card Acquisition Funnel — batch pipeline (Phase 1).
+"""Card Acquisition Funnel — batch pipeline (Phases 1 & 3).
 
     ingest (Kaggle -> GCS -> BigQuery)  ->  dbt run + dbt test  (via Cosmos)
+    ->  generate_digest (proactive multi-agent digest, cached at $0)
 
 Cosmos renders EACH dbt model as its own Airflow task (with its tests right after),
 so the DAG mirrors the dbt lineage instead of hiding it behind a single
 `BashOperator dbt run`. The dbt project and the ingest script are bind-mounted from
 the repo (see docker-compose.override.yml) — one source of truth, no duplication.
+
+After the marts are built AND tested, `generate_digest` runs the proactive pipeline
+(planner -> parallel analysts -> deterministic critic gate -> narrator) for the latest
+fully-observed cohort and upserts the critic-gated, numerically-faithful result into
+`mart_digest_cache`. Serving from that cache keeps the Streamlit "Insight of the month"
+panel at $0. The digest runs in its own light venv (google-genai, not google-adk).
 
 Honest framing: on the static Santander panel this batch runs once. It is written
 for incremental ingestion (schedule it @daily in production) and included as a
@@ -31,8 +38,13 @@ from cosmos import (
 from cosmos.constants import LoadMode, TestBehavior
 
 # Paths inside the Airflow containers (bind-mounted from the repo).
-DBT_PROJECT_DIR = Path("/usr/local/airflow/dbt")
+AIRFLOW_HOME = Path("/usr/local/airflow")
+DBT_PROJECT_DIR = AIRFLOW_HOME / "dbt"
 INGEST_SCRIPT = "/usr/local/airflow/scripts/ingest.py"
+
+# The digest job runs in its own light venv (see Dockerfile); the agents/semantic
+# packages are bind-mounted, so PYTHONPATH points at the Airflow home to import them.
+AGENTS_PYTHON = "/usr/local/airflow/agents_venv/bin/python"
 
 # dbt lives in its own venv (see Dockerfile) — Airflow and dbt can't share one
 # environment without a dependency conflict. Cosmos shells out to this binary.
@@ -82,4 +94,16 @@ with DAG(
         execution_config=execution_config,
     )
 
-    ingest >> transform
+    # Proactive digest, post-dbt: generate for the latest fully-observed cohort and upsert
+    # into mart_digest_cache. Keyed by {{ run_id }} so a re-run upserts instead of duplicating.
+    # The honesty gate lives in the job: only a critic-passed, numerically-faithful digest
+    # is cached; anything else is logged for human review and skipped.
+    generate_digest = BashOperator(
+        task_id="generate_digest",
+        bash_command=(
+            f"PYTHONPATH={AIRFLOW_HOME} {AGENTS_PYTHON} -m agents.digest_job "
+            '--run-id "{{ run_id }}" --window msa_6'
+        ),
+    )
+
+    ingest >> transform >> generate_digest
