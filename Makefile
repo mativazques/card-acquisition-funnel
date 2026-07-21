@@ -9,52 +9,56 @@ endif
 PYTHON ?= python3
 DBT ?= .venv/bin/dbt
 DBT_DIR := dbt
-# The Streamlit app has its own venv: streamlit pins protobuf<6 while dbt needs >=6,
-# so they cannot share an environment. Create it with:
-#   python3 -m venv .venv-app && .venv-app/bin/pip install -r app/requirements.txt
-APP_PYTHON ?= .venv-app/bin/python
-# The copilot (FastAPI + Gemini + ADK) has its own venv — google-genai + fastapi.
-# Create it with:
-#   python3 -m venv .venv-copilot && .venv-copilot/bin/pip install -r copilot/requirements.txt
-COPILOT_PYTHON ?= .venv-copilot/bin/python
-# The MCP server needs its own venv: MCP SDK requires Python >=3.10. Create with:
-#   python3.12 -m venv .venv-mcp && .venv-mcp/bin/pip install -r copilot/requirements-mcp.txt
-MCP_PYTHON ?= .venv-mcp/bin/python
+# Two venvs, forced apart by a protobuf pin clash (streamlit<6 vs google-adk 6.x):
+#   .venv        (Python 3.9)  — dbt + Streamlit + the semantic package.
+#     python3 -m venv .venv && .venv/bin/pip install -r dbt/requirements.txt -r app/requirements.txt
+#   .venv-agents (Python 3.12) — the agent layer: copilot API, digest job, MCP server.
+#     python3.12 -m venv .venv-agents && .venv-agents/bin/pip install -r agents/requirements.txt
+APP_PYTHON ?= .venv/bin/python
+AGENTS_PYTHON ?= .venv-agents/bin/python
 # dbt reads GCP_PROJECT / BQ_DBT_DATASET / BQ_LOCATION from the exported .env above.
 export DBT_PROFILES_DIR := $(abspath dbt)
 
-# Deploy: Terraform owns the serving layer; the image lands in Artifact Registry.
+# Deploy: Terraform owns the SERVING layer only. Two scale-to-zero Cloud Run services,
+# two images in Artifact Registry — Streamlit (protobuf<6) and the agent API (protobuf 6.x)
+# cannot share one image, so they cannot share one container.
 TF_DIR := terraform
 GCP_REGION ?= us-central1
-AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT)/funnel/card-acquisition-funnel:latest
+BQ_MARTS_DATASET ?= analytics_marts
+AR_REPO := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT)/funnel
+AR_IMAGE_API := $(AR_REPO)/copilot-api:latest
+AR_IMAGE_APP := $(AR_REPO)/cockpit:latest
 TF := terraform -chdir=$(TF_DIR)
-TF_VARS := -var project_id=$(GCP_PROJECT) -var region=$(GCP_REGION) -var bq_dbt_dataset=$(BQ_DBT_DATASET)
+TF_VARS := -var project_id=$(GCP_PROJECT) -var region=$(GCP_REGION) \
+	-var bq_marts_dataset=$(BQ_MARTS_DATASET) \
+	-var image_api=$(AR_IMAGE_API) -var image_app=$(AR_IMAGE_APP)
 
 .DEFAULT_GOAL := help
-.PHONY: help hydrate app api mcp copilot-test mcp-test docker-build tf-init tf-bootstrap secret-push image-push deploy trim teardown dbt-debug dbt-run dbt-test dbt-build dbt-docs airflow-start airflow-stop
+.PHONY: help hydrate app api mcp agents-test semantic-test docker-build-api docker-build-app tf-init tf-bootstrap secret-push image-push deploy trim teardown dbt-debug dbt-run dbt-test dbt-build dbt-docs airflow-start airflow-stop
 
 help:
-	@echo "hydrate        - ingest Kaggle competition -> GCS -> BQ, then build + test dbt models"
-	@echo "dbt-debug      - check dbt connects to BigQuery"
-	@echo "dbt-run        - build dbt models        (SELECT=name to target one)"
-	@echo "dbt-test       - run dbt data tests       (SELECT=... optional)"
-	@echo "dbt-build      - run + test in DAG order  (SELECT=... optional)"
-	@echo "dbt-docs       - generate dbt docs"
-	@echo "app            - run the Streamlit cockpit locally (reads the marts)"
-	@echo "api            - run the copilot FastAPI service locally (needs GEMINI_API_KEY)"
-	@echo "mcp            - run the MCP server (stdio) exposing the governed tools to MCP clients"
-	@echo "copilot-test   - run the copilot + semantic unit tests (no LLM, no BigQuery)"
-	@echo "mcp-test       - run the MCP server unit tests (.venv-mcp; no live client, no BigQuery)"
-	@echo "airflow-start  - local Airflow via Astro CLI (Cosmos dbt DAG; needs Docker)"
-	@echo "airflow-stop   - stop the local Airflow"
-	@echo "docker-build   - build the Cloud Run image locally"
-	@echo "tf-init        - terraform init (deploy layer)"
-	@echo "tf-bootstrap   - create Artifact Registry + secret container + enable APIs"
-	@echo "secret-push    - push GEMINI_API_KEY into Secret Manager (value stays out of git/tf)"
-	@echo "image-push     - build (linux/amd64) + push the image to Artifact Registry"
-	@echo "deploy         - terraform apply the Cloud Run service; prints the public URL"
-	@echo "trim           - drop raw GCS object + raw BQ table, keep marts (zero-storage resting state)"
-	@echo "teardown       - terraform destroy the serving layer (data layer kept)"
+	@echo "hydrate         - ingest Kaggle competition -> GCS -> BQ, then build + test dbt models"
+	@echo "dbt-debug       - check dbt connects to BigQuery"
+	@echo "dbt-run         - build dbt models        (SELECT=name to target one)"
+	@echo "dbt-test        - run dbt data tests       (SELECT=... optional)"
+	@echo "dbt-build       - run + test in DAG order  (SELECT=... optional)"
+	@echo "dbt-docs        - generate dbt docs"
+	@echo "app             - run the Streamlit cockpit locally (.venv; reads the marts)"
+	@echo "api             - run the copilot FastAPI service locally (.venv-agents; needs GEMINI_API_KEY)"
+	@echo "mcp             - run the MCP server (stdio) exposing the governed tools to MCP clients"
+	@echo "agents-test     - run the agent-layer + semantic + MCP unit tests (.venv-agents; no LLM/BQ)"
+	@echo "semantic-test   - run the semantic-layer contract tests in the BI venv (.venv; no LLM/BQ)"
+	@echo "airflow-start   - local Airflow via Astro CLI (Cosmos dbt DAG; needs Docker)"
+	@echo "airflow-stop    - stop the local Airflow"
+	@echo "docker-build-api- build the copilot-API Cloud Run image locally"
+	@echo "docker-build-app- build the Streamlit-cockpit Cloud Run image locally"
+	@echo "tf-init         - terraform init (serving layer)"
+	@echo "tf-bootstrap    - create Artifact Registry + secret container + enable APIs"
+	@echo "secret-push     - push GEMINI_API_KEY into Secret Manager (value stays out of git/tf)"
+	@echo "image-push      - build (linux/amd64) + push BOTH images to Artifact Registry"
+	@echo "deploy          - terraform apply the two Cloud Run services; prints the public URLs"
+	@echo "trim            - drop raw GCS object + raw BQ table, keep marts (zero-storage resting state)"
+	@echo "teardown        - terraform destroy the serving layer (data layer kept)"
 
 # Full pipeline: raw ingestion, then build + test the dbt DAG.
 # NOTE: accept Kaggle competition rules before running this target (see .env.example).
@@ -77,25 +81,25 @@ dbt-build:
 dbt-docs:
 	$(DBT) docs generate --project-dir $(DBT_DIR)
 
-# Local BI cockpit. Reads the marts via ADC; wrap queries in @st.cache_data.
+# Local BI cockpit (.venv, Python 3.9). Reads the marts via ADC; wrap queries in @st.cache_data.
 app:
 	$(APP_PYTHON) -m streamlit run app/main.py
 
-# Local copilot API (FastAPI + Gemini + ADK). Governed tools over the semantic layer.
+# Local copilot API (FastAPI + Gemini + ADK) in .venv-agents. Governed tools over the semantic layer.
 api:
-	$(COPILOT_PYTHON) -m uvicorn copilot.api:app --reload --port 8000
+	$(AGENTS_PYTHON) -m uvicorn agents.api:app --reload --port 8000
 
-# Copilot + semantic unit tests (no LLM, no BigQuery — the model is faked).
-copilot-test:
-	$(COPILOT_PYTHON) -m pytest tests/ -q --ignore=tests/test_mcp_server.py
+# Agent-layer + semantic + MCP unit tests, all in .venv-agents (no LLM, no BigQuery — the model is faked).
+agents-test:
+	PYTHONPATH=. $(AGENTS_PYTHON) -m pytest tests/ -q
+
+# Semantic-layer contract tests in the BI venv, proving the package imports under Python 3.9 too.
+semantic-test:
+	PYTHONPATH=. $(APP_PYTHON) -m pytest tests/test_semantic.py -q
 
 # MCP server (stdio transport) — same governed tools as the copilot, for any MCP client.
 mcp:
-	$(MCP_PYTHON) -m copilot.mcp_server
-
-# MCP server unit tests (its own 3.10+ venv; no live client, no BigQuery).
-mcp-test:
-	$(MCP_PYTHON) -m pytest tests/test_mcp_server.py -q
+	$(AGENTS_PYTHON) -m agents.mcp_server
 
 # Local Airflow (Astronomer) — Cosmos renders each dbt model as its own task.
 # Needs Docker running + the Astro CLI (https://docs.astronomer.io/astro/cli/install-cli).
@@ -107,17 +111,20 @@ airflow-stop:
 	cd airflow && astro dev stop
 
 # --- Deploy -----------------------------------------------------------------------
-# Build the Cloud Run image locally (single container, isolated venvs).
-docker-build:
-	docker build -t card-acquisition-funnel:local .
+# Build the two Cloud Run images locally (amd64 to match Cloud Run).
+docker-build-api:
+	docker build --platform linux/amd64 -f Dockerfile.api -t $(AR_IMAGE_API) .
+
+docker-build-app:
+	docker build --platform linux/amd64 -f Dockerfile.app -t $(AR_IMAGE_APP) .
 
 tf-init:
 	$(TF) init
 
 # Create only the pieces needed before we can push: registry + secret + APIs.
-# The Cloud Run service itself comes later in `deploy`, once the image exists.
+# The Cloud Run services themselves come later in `deploy`, once the images exist.
 tf-bootstrap:
-	$(TF) apply $(TF_VARS) -var image=$(AR_IMAGE) \
+	$(TF) apply $(TF_VARS) \
 		-target=google_project_service.apis \
 		-target=google_artifact_registry_repository.funnel \
 		-target=google_secret_manager_secret.gemini
@@ -127,16 +134,17 @@ secret-push:
 	printf %s "$(GEMINI_API_KEY)" | gcloud secrets versions add gemini-api-key \
 		--project=$(GCP_PROJECT) --data-file=-
 
-# Build for Cloud Run's amd64 and push to Artifact Registry.
-image-push:
+# Build for Cloud Run's amd64 and push BOTH images to Artifact Registry.
+image-push: docker-build-api docker-build-app
 	gcloud auth configure-docker $(GCP_REGION)-docker.pkg.dev --quiet
-	docker build --platform linux/amd64 -t $(AR_IMAGE) .
-	docker push $(AR_IMAGE)
+	docker push $(AR_IMAGE_API)
+	docker push $(AR_IMAGE_APP)
 
-# Create/patch the Cloud Run service and wire the image; print the public URL.
+# Create/patch the two Cloud Run services and wire the images; print the public URLs.
 deploy:
-	$(TF) apply $(TF_VARS) -var image=$(AR_IMAGE)
-	@echo "Deployed at: $$($(TF) output -raw url)"
+	$(TF) apply $(TF_VARS)
+	@echo "Cockpit (public demo): $$($(TF) output -raw cockpit_url)"
+	@echo "Copilot API:           $$($(TF) output -raw api_url)"
 
 # Ephemeral raw: keep the marts (serving layer), drop the heavy raw layer.
 # Re-hydrate anytime with `make hydrate`.
@@ -146,7 +154,7 @@ trim:
 	-bq rm -f -t $(GCP_PROJECT):$(BQ_DATASET).$(BQ_RAW_TABLE)
 	@echo "Done. Re-hydrate anytime with: make hydrate"
 
-# Destroy the serving layer (Cloud Run, SA, IAM, registry, secret). The data layer
-# (GCS raw bucket + BigQuery datasets) is left intact — use `make trim` to drop raw.
+# Destroy the serving layer (both Cloud Run services, SA, IAM, registry, secret). The data
+# layer (GCS raw bucket + BigQuery datasets) is left intact — use `make trim` to drop raw.
 teardown:
-	$(TF) destroy $(TF_VARS) -var image=$(AR_IMAGE)
+	$(TF) destroy $(TF_VARS)

@@ -1,0 +1,45 @@
+# Keep the build context tiny and secrets/venvs/data out of every image.
+# The Dockerfiles COPY only the dirs they need, but this also protects the context.
+
+# Secrets — NEVER into an image
+.env
+.env.*
+!.env.example
+*.json
+!**/requirements*.txt
+
+# Virtualenvs
+.venv
+.venv-agents
+.venv-app
+.venv-copilot
+.venv-mcp
+
+# Python caches
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+
+# Data (public datasets are hydrated, never baked in)
+data
+*.csv
+*.parquet
+*.xlsx
+*.zip
+
+# dbt / Airflow / Terraform local state
+dbt/target
+dbt/dbt_packages
+dbt/logs
+airflow
+terraform/.terraform
+*.tfstate
+*.tfstate.*
+
+# Repo meta not needed at runtime
+.git
+.github
+docs
+tests
+*.md
+.DS_Store

@@ -23,6 +23,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import requests  # noqa: E402
+
+from config import COPILOT_API_URL  # noqa: E402
 from queries import (  # noqa: E402
     load_adoption_curves,
     load_cohort_heatmap,
@@ -85,8 +88,8 @@ if _digest is not None:
             "critic approved; any invented number blocks caching and flags the digest for review."
         )
 
-vintage_tab, funnel_tab, heatmap_tab = st.tabs(
-    ["Adoption vintage curves", "Funnel waterfall", "Cohort × segment heatmap"]
+vintage_tab, funnel_tab, heatmap_tab, copilot_tab = st.tabs(
+    ["Adoption vintage curves", "Funnel waterfall", "Cohort × segment heatmap", "Ask the copilot"]
 )
 
 
@@ -301,3 +304,55 @@ with heatmap_tab:
             "'03 - UNIVERSITARIO', 'unknown' (NULL in source). "
             "Cells with fully_observed_12=true have 12 full panel months of observation."
         )
+
+
+# ── Visual 4: Ask the copilot (reactive text-to-metric Q&A) ──────────────────────
+# The copilot is a SEPARATE Cloud Run service (protobuf split). This tab is a thin client:
+# it POSTs the question to its /ask endpoint, which runs the L2→L1→L3→L4 hardening gates
+# before spending a Gemini token. Every answer is text-to-metric over the governed layer —
+# never raw SQL — so the numbers match the charts above.
+with copilot_tab:
+    st.subheader("Ask the copilot")
+    st.caption(
+        "Reactive, single-agent Q&A over the same governed metrics the charts use "
+        "(text-to-metric, never text-to-SQL). Deliberately minimal — the multi-agent work "
+        "is the proactive digest above. Answers state WHAT the metrics show, not WHY."
+    )
+
+    if not COPILOT_API_URL:
+        st.info(
+            "The copilot API URL is not configured. Set `COPILOT_API_URL` (locally: run "
+            "`make api` and export `COPILOT_API_URL=http://localhost:8000`). In the deployed "
+            "cockpit this is wired to the copilot Cloud Run service automatically."
+        )
+    else:
+        question = st.text_input(
+            "Question",
+            placeholder="e.g. What is the adoption_rate for the 2015-06 cohort at msa_6?",
+        )
+        if st.button("Ask", type="primary") and question.strip():
+            with st.spinner("Thinking…"):
+                try:
+                    resp = requests.post(
+                        f"{COPILOT_API_URL}/ask",
+                        json={"question": question},
+                        timeout=60,
+                    )
+                except requests.RequestException as exc:
+                    st.error(f"Could not reach the copilot API: {exc}")
+                else:
+                    payload = resp.json() if resp.content else {}
+                    if resp.status_code == 200:
+                        st.markdown(payload.get("answer") or "_(empty answer)_")
+                        if payload.get("cached"):
+                            st.caption("Served from the answer cache — $0, no token spent.")
+                    elif resp.status_code == 400:
+                        st.warning(
+                            "The question was rejected by the on-topic / input guard "
+                            f"(reason: {payload.get('reason', 'rejected')}). Ask about the "
+                            "governed funnel metrics — adoption, retention, cohorts, segments."
+                        )
+                    elif resp.status_code == 429:
+                        st.warning("Rate limit reached — the free-tier guard is protecting the quota. Try again shortly.")
+                    else:
+                        st.error(f"Unexpected response ({resp.status_code}).")

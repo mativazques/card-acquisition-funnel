@@ -23,6 +23,11 @@ MARTS_DATASET = f"{_DBT_DATASET}_marts"
 
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "card-acquisition-funnel-2026")
 
+# The reactive copilot runs as a separate Cloud Run service (protobuf split — it cannot
+# share this image). In production Terraform injects its public URL here; unset locally
+# unless `make api` is running, in which case point it at http://localhost:8000.
+COPILOT_API_URL = os.environ.get("COPILOT_API_URL", "").rstrip("/")
+
 
 def marts_table(name: str) -> str:
     """Fully-qualified `project.dataset.table` for a mart."""
