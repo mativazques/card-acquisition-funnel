@@ -37,29 +37,33 @@ def faithfulness_check(text: str, allowed: set[str]) -> dict:
     return {"faithful": not violations, "violations": violations}
 
 
-def _pct(value: float) -> str:
+def pct_token(value: float) -> str:
+    """Display form of a rate: a 2-decimal percentage (e.g. 0.0052 -> '0.52%'), normalized."""
     return _normalize(f"{value * 100:.2f}%")
 
 
-def _pp(value: float) -> str:
+def pp_token(value: float) -> str:
+    """Display form of a delta: 2-decimal percentage points (e.g. -0.0032 -> '-0.32pp'), normalized."""
     return _normalize(f"{value * 100:.2f}pp")
 
 
 def allowed_tokens(struct: dict) -> set[str]:
     """The set of numeric display tokens the narrator is permitted to restate, derived from
     the critic struct. Rates render as 2-decimal percentages, deltas as pp (signed and
-    absolute), plus cell sizes and cohort labels."""
+    absolute), plus cell sizes, cohort labels, and the observation-window number."""
     allowed: set[str] = {_normalize(struct["cohort_month"])}
+    for num in re.findall(r"\d+", struct.get("window", "")):
+        allowed.add(_normalize(num))
     for f in struct.get("findings", []):
         for key in ("cohort", "prior_cohort"):
             if f.get(key):
                 allowed.add(_normalize(f[key]))
         for key in ("value", "prior_value"):
             if f.get(key) is not None:
-                allowed.add(_pct(f[key]))
+                allowed.add(pct_token(f[key]))
         if f.get("delta") is not None:
-            allowed.add(_pp(f["delta"]))
-            allowed.add(_pp(abs(f["delta"])))
+            allowed.add(pp_token(f["delta"]))
+            allowed.add(pp_token(abs(f["delta"])))
         if f.get("n") is not None:
             allowed.add(_normalize(str(f["n"])))
     return allowed

@@ -5,7 +5,16 @@ proactive ADK digest, MCP wrapper) speaks one contract: a SemanticError becomes 
 error-as-data instead of an exception the LLM runtime cannot catch, and each tool ships a
 Gemini-style function declaration.
 """
-from agents.tools import TOOL_DECLARATIONS, TOOL_FUNCTIONS, tool_list_metrics, tool_query_metric
+import pytest
+
+from agents.tools import (
+    TOOL_DECLARATIONS,
+    TOOL_FUNCTIONS,
+    tool_compare_cohorts,
+    tool_explain_metric,
+    tool_list_metrics,
+    tool_query_metric,
+)
 
 
 def test_tool_list_metrics_passes_through_the_seven_metrics():
@@ -36,3 +45,11 @@ def test_query_metric_declaration_exposes_the_dimension_param():
 def test_every_declaration_has_a_matching_callable():
     for d in TOOL_DECLARATIONS:
         assert d["name"] in TOOL_FUNCTIONS
+
+
+def test_tool_signatures_are_parseable_by_adk_automatic_function_calling():
+    # Regression: ADK's automatic function calling rejects `str | None` unions — a copilot
+    # turn raised at request time and returned an empty answer. Guard the signatures directly.
+    FunctionTool = pytest.importorskip("google.adk.tools.function_tool").FunctionTool
+    for fn in (tool_list_metrics, tool_query_metric, tool_compare_cohorts, tool_explain_metric):
+        FunctionTool(fn)._get_declaration()  # raises ValueError on an unparseable signature

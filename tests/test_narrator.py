@@ -55,3 +55,61 @@ def test_narrate_blocks_caching_when_the_llm_invents_a_number():
     assert out["faithful"] is False
     assert out["cacheable"] is False
     assert "0.19%" in out["violations"]
+
+
+def test_prompt_pre_formats_raw_floats_so_a_verbatim_narration_is_faithful():
+    # Regression: the prompt used to hand the LLM raw floats (e.g. 0.0025958...), which a real
+    # model re-rendered at full precision — never matching the 2-decimal tokens the gate allows.
+    struct = {
+        "cohort_month": "2015-11",
+        "window": "msa_6",
+        "findings": [
+            {
+                "kind": "blended_delta",
+                "cohort": "2015-11",
+                "prior_cohort": "2015-10",
+                "value": 0.0044998043,
+                "prior_value": 0.0025958324,
+                "delta": 0.0019040,
+                "material": False,
+            }
+        ],
+        "suppressed": [],
+        "notes": [],
+        "critic_passed": True,
+    }
+    prompt = build_prompt(struct)
+    assert "0.0025958" not in prompt and "0.0019040" not in prompt  # no raw floats leak
+    assert "0.45%" in prompt and "0.26%" in prompt and "0.19pp" in prompt  # display tokens present
+    prose = "Blended adoption rose to 0.45% from 0.26%, a 0.19pp change over the msa_6 window."
+    out = narrate(struct, generate=lambda _p: prose)
+    assert out["faithful"] is True and out["cacheable"] is True and out["violations"] == []
+
+
+def test_prompt_strips_segment_code_prefix_so_it_is_not_a_stray_number():
+    # Regression: segment labels like "01 - TOP" leaked the token "01" into the prose.
+    struct = {
+        "cohort_month": "2015-11",
+        "window": "msa_6",
+        "findings": [
+            {
+                "kind": "segment_delta",
+                "segment": "01 - TOP",
+                "cohort": "2015-11",
+                "prior_cohort": "2015-10",
+                "value": 0.018,
+                "prior_value": 0.0226,
+                "delta": -0.0046,
+                "n": 430,
+                "material": False,
+            }
+        ],
+        "suppressed": [],
+        "notes": [],
+        "critic_passed": True,
+    }
+    prompt = build_prompt(struct)
+    assert "TOP" in prompt and "01 - TOP" not in prompt
+    prose = "The TOP segment moved to 1.80% from 2.26%, a -0.46pp change."
+    out = narrate(struct, generate=lambda _p: prose)
+    assert out["faithful"] is True and out["violations"] == []

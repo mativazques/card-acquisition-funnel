@@ -19,9 +19,10 @@ same code, D19), while tests pass a canned function so they stay offline and det
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable
 
-from agents.faithfulness import allowed_tokens, faithfulness_check
+from agents.faithfulness import allowed_tokens, faithfulness_check, pct_token, pp_token
 
 CAUSALITY_PROHIBITION = (
     "You may state WHAT changed and by how much, using only the numbers given. You must NOT "
@@ -37,21 +38,64 @@ _SYSTEM = (
 )
 
 
+def _clean_segment(segment: str | None) -> str | None:
+    """Drop the numeric code prefix from a segment label ('01 - TOP' -> 'TOP') so it never
+    reaches the narrator as a stray number the faithfulness gate would flag."""
+    if not segment:
+        return segment
+    return re.sub(r"^\s*\d+\s*-\s*", "", segment).strip()
+
+
+def _display_finding(f: dict) -> dict:
+    """Render one critic finding as pre-formatted display strings — the exact tokens
+    `allowed_tokens` will accept, so the narrator can only copy them verbatim."""
+    out: dict = {"change_type": f.get("kind"), "material": f.get("material", False)}
+    if f.get("segment"):
+        out["segment"] = _clean_segment(f["segment"])
+    for key in ("cohort", "prior_cohort"):
+        if f.get(key):
+            out[key] = f[key]
+    if f.get("value") is not None:
+        out["adoption_rate"] = pct_token(f["value"])
+    if f.get("prior_value") is not None:
+        out["prior_adoption_rate"] = pct_token(f["prior_value"])
+    if f.get("delta") is not None:
+        out["change_pp"] = pp_token(f["delta"])
+    if f.get("n") is not None:
+        out["cohort_cell_size"] = f["n"]
+    return out
+
+
+def _display_suppressed(s: dict) -> dict:
+    """Render a suppression record without leaking raw counts as narratable numbers."""
+    out: dict = {"reason": s.get("reason")}
+    if s.get("segment"):
+        out["segment"] = _clean_segment(s["segment"])
+    if s.get("cohort"):
+        out["cohort"] = s["cohort"]
+    return out
+
+
 def build_prompt(struct: dict) -> str:
-    """Render the narrator prompt from the critic struct alone (constraint 1)."""
+    """Render the narrator prompt from the critic struct alone (constraint 1).
+
+    Numbers are pre-formatted to their display tokens here so the model only ever copies the
+    critic-approved figures — never a raw float it would re-round into a faithfulness violation.
+    """
     payload = {
         "cohort_month": struct["cohort_month"],
-        "window": struct["window"],
-        "findings": struct.get("findings", []),
-        "suppressed": struct.get("suppressed", []),
+        "observation_window": struct["window"],
+        "findings": [_display_finding(f) for f in struct.get("findings", [])],
+        "suppressed": [_display_suppressed(s) for s in struct.get("suppressed", [])],
         "notes": struct.get("notes", []),
     }
     return (
         f"{_SYSTEM}\n\n"
-        "Critic-approved figures (the ONLY numbers you may use):\n"
+        "Critic-approved figures (the ONLY numbers you may use — copy each figure exactly as "
+        "written; do not re-round, recompute, or introduce any other number):\n"
         f"{json.dumps(payload, indent=2, sort_keys=True)}\n\n"
-        "Write 2–4 sentences summarizing the material findings for this cohort. "
-        "Report rates as percentages and deltas in percentage points (pp), exactly as given."
+        "Write 2–4 sentences summarizing the material findings for this cohort. Rates are already "
+        "formatted as percentages and changes as percentage points (pp) — quote them verbatim."
     )
 
 

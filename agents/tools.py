@@ -35,10 +35,13 @@ def tool_list_metrics() -> Any:
 def tool_query_metric(
     metric_id: str,
     window: str = "lifetime",
-    cohort: str | None = None,
-    dimension: str | None = None,
+    cohort: str = "",
+    dimension: str = "",
 ) -> Any:
-    return _as_data(query_metric, metric_id, window, cohort, dimension)
+    # Simple str params (empty = omitted) keep the signature parseable by ADK automatic
+    # function calling, which rejects `str | None` unions; "" maps back to the None the
+    # semantic layer expects for "all cohorts" / "no breakdown".
+    return _as_data(query_metric, metric_id, window, cohort or None, dimension or None)
 
 
 def tool_compare_cohorts(
